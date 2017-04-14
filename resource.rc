@@ -12,14 +12,14 @@
 //
 
 //Edit this part only!
-#define INFESTIONVERSIONs "1.0.0.0"
-#define INFESTIONVERSIONc 1,0,0,0
+#define INFECTIONVERSIONs "2.0.0.0"
+#define INFECTIONVERSIONc 2,0,0,0
 //
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 1 VERSIONINFO
-    FILEVERSION     INFESTIONVERSIONc
-    PRODUCTVERSION  INFESTIONVERSIONc
+    FILEVERSION     INFECTIONVERSIONc
+    PRODUCTVERSION  INFECTIONVERSIONc
     FILEOS          VOS_DOS_WINDOWS32
     FILETYPE        VFT_DLL
     FILESUBTYPE     VFT2_UNKNOWN
@@ -34,14 +34,14 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
     {
         BLOCK "040901b5"
         {
-            VALUE "CompanyName", "Danger Zone Studio"
-            VALUE "FileDescription", "It provide commands for the players and/or admins to build a roleplaying into Halo."
-            VALUE "FileVersion", INFESTIONVERSIONs
-            VALUE "LegalCopyright", "Copyright (C) 2011 - Present"
-            VALUE "OriginalFilename", "RP Mod.eao"
-            VALUE "ProductName", "Role-Play Mod"
-            VALUE "ProductVersion", INFESTIONVERSIONs
-            VALUE "InternalName", "RP Mod"
+            VALUE "CompanyName", "RadWolfie & Wizard"
+            VALUE "FileDescription", "It provide ability simulate a zombie gametype with almost any proper gametype."
+            VALUE "FileVersion", INFECTIONVERSIONs
+            VALUE "LegalCopyright", "Copyright (C) 2014 - Present"
+            VALUE "OriginalFilename", "Infection.eao"
+            VALUE "ProductName", "Infection"
+            VALUE "ProductVersion", INFECTIONVERSIONs
+            VALUE "InternalName", "Infection"
         }
     }
     BLOCK "VarFileInfo"

@@ -1,0 +1,45 @@
+Current issue with re-port Infection:
+
+Things left to do.
+* Player scoreboard patch (cannot provide sig of these patches due to halo build are not compatible.)
+* Implement uninitialize support to revert back to original gameplay.
+** (DONE) there's a patch to tag meta, relative to must_be_readied and must_be_picked_up.
+** What else?
+* Implement storage for player leaving on current gameplay, not previous or next one.
+* On EXTOnLoad hook, need to passdown map's name to EXTOnMapLoad hook function.
+
+Finally
+* Implement suppport for commands
+** Including enable/disable gametype.
+* Check if game is hoster.
+* Option for game_enable (to permit override, require command implement first.)
+
+Extra Feature
+* Check gametype name containing Infection (case insensitive)
+** If so, then enable gametype. Although, need 2 implement. 1 global enable and 1 gametype enable.
+* Strip down to separate existing hooks to remove necessary timer event.
+==================================
+
+cur_players = pIHaloEngine->serverHeader->totalPlayers
+
+Persistent = continuing aka does not unload at end of game.
+
+* Funcs (DONE)
+* Timers (DONE)
+* Hooks (DONE)
+
+
+============
+
+Relative, yet new idea.
+
+Have a default section, then... use map name section for specific global values.
+
+
+
+30 ticks = 1 second (Or is it 33 ticks = 1 second? Seems like it is...)
+100 ms = ?
+1 tick = 0.0333333 second
+
+How to calcuate ticks...
+30 ticks * xxx second(s) = total of ticks.

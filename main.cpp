@@ -1,23 +1,46 @@
 #include <windows.h>
 #include <stdio.h>
+
+#define EXT_IUTIL
 #define EXT_IPLAYER
 #define EXT_IOBJECT
 #define EXT_IHALOENGINE
 #define EXT_ITIMER
+#define EXT_HKTIMER
 #define EXT_ICOMMAND
 #define EXT_ICINIFILE
+
+#define _INC_TIME
 #pragma comment(lib, "../Add-on API/Add-on API.lib")
 #include "../Add-on API/Add-on API.h"
 
-#define offsetof(s,m)   (size_t)&reinterpret_cast<const volatile char&>((((s *)0)->m))
+addon_info EXTPluginInfo = { L"Infection GameType Add-on", L"2.0.0.0",
+                                    L"RadWolfie & Wizard",
+                                    L"It provide ability simulate a zombie gametype with almost any proper gametype.",
+                                    L"Infection Gametype",
+                                    L"gametype",
+                                    NULL,
+                                    NULL,
+                                    NULL,
+                                    NULL };
 
+//#define offsetof(s,m)   (size_t)&reinterpret_cast<const volatile char&>((((s *)0)->m))
+
+IUtil* pIUtil = 0;
+IPlayer* pIPlayer = 0;
+IObject* pIObject = 0;
+IHaloEngine* pIHaloEngine = 0;
+ITimer* pITimer = 0;
+ICommand* pICommand = 0;
+ICIniFile* pICIniFile = 0;
+UINT EAOHashID = 0;
 
 #pragma region //Wizard's Code
 #include <string>
 #include <vector>
 #include <math.h>    //Dumb Microsoft for leaving out round in many versions...
 #include <time.h>   //Is needed for srand function.
-double round(double num) {
+double roundC(double num) {
     return (num > 0.0) ? floor(num + 0.5) : ceil(num - 0.5);
 }
 #define randomRange(min, max) (min + (rand() % (int)(max - min + 1)))
@@ -25,61 +48,82 @@ double round(double num) {
 
 // Global Variable
 //std::wstring default_script_prefix = L"";
-char human_team = 0; // 0 is red, 1 is blue
-int max_zombie_count = 2; // this caps what the zombie count would be w/ ratio (nil is disable)
-DWORD time_invis = 1; // In seconds, how long the zombie/human should be invis when they crouch.
+e_color_team_index human_team = COLOR_TEAM_RED; // 0 is red, 1 is blue
+UINT max_zombie_count = 1; // this caps what the zombie count would be w/ ratio (nil is disable)
+UINT time_invis = 1; // In seconds, how long the zombie/human should be invis when they crouch.
 int zombie_count = 1; // if value is less than 1 is it used as a percentage, more than or equal to one is absolute count
-char zombie_team = 1; // 0 is red, 1 is blue
-char join_team = zombie_team; // the team that people will join if a game is currently running
+e_color_team_index zombie_team = COLOR_TEAM_BLUE; // 0 is red, 1 is blue
+e_color_team_index join_team = zombie_team; // the team that people will join if a game is currently running
+float flashlight_speed = 2.2f; //I wouldn't suggest increasing this, unless you want people to lag.
 
-    //Alpha Zombie Variables
+    // Alpha Zombie Variables
 int alphazombie_frag_count = 0; // number of frag nades they spawn with
 int alphazombie_plasma_count = 0; // number of plasma nades they spawn with
 int alphazombie_clip_count = 0; // number of shots in clip (loaded ammo)
 int alphazombie_ammo_count = 0; // backpack ammo they get (unloaded ammo)
 float alphazombie_battery_count = 0.0f; // stored as a percent (0 to 1, do NOT go over or under)
 
-//Zombie Variables
+    // Zombie Variables
 int zombie_ammo_count = 0; // backpack ammo zombies once there are not only alpha zombies (unloaded ammo)
 int zombie_clip_count = 0; // number of shots in clip for zombies once there are not only alpha zombies (loaded ammo)
 float zombie_battery_count = 0; // stored as a percent (0 to 1, do NOT go over or under)
 int zombie_frag_count = 0; // number of frag nades they spawn with
 int zombie_plasma_count = 0; // number of plasma nades they spawn with
-int zombie_spawn_time = 1; // spawn time for zombies in seconds. Leave "default" for default spawn time of gametype
+int zombie_spawn_time = 0; // spawn time for zombies in seconds. Leave "default" for default spawn time of gametype
 float zombie_speed = 1.5f; // zombie speed
+e_color_index zombie_color = COLOR_TAN;
 
-//Zombie weapons
+    // Zombie weapons
 // Note: If you decide the player holds a flag or a ball, make sure the secondary, tertiary, and quarternary fields are "".
 // DO NOT make zombies hold multiple weapons if you want them to hold an oddball or a flag. If you do it will not work right, and it's entirely your fault.
-/*
-DISABLED AS THIS ISN'T REALLY NEEDED
-zombie_weapon = {} // don't touch this
-zombie_weapon[1] = "weapons\\ball\\ball" // Primary weapon for zombies
-zombie_weapon[2] = "weapons\\ball\\ball" // Secondary weapon for zombies.
-zombie_weapon[3] = "" // Tertiary weapon for zombies.
-zombie_weapon[4] = "" // Quarternary weapon for zombies.*/
+const char* zombie_weapon[4] = {
+    "weapons\\shotgun\\shotgun",    // Primary weapon for zombies.
+    "",                             // Secondary weapon for zombies.
+    "",                             // Tertiary weapon for zombies.
+    ""};                            // Quarternary weapon for zombies.
+s_ident zweapon[4] = { 0 };
+
+    // Human weapons
+const char* human_weapon[4] = {
+    "",                             // Primary weapon for humans.
+    "",                             // Secondary weapon for humans.
+    "",                             // Tertiary weapon for humans.
+    ""};                            // Quarternary weapon for humans.
+s_ident hweapon[4] = { 0 };
 
     // Human Variables
-float human_dmgmodifier = 1.55f; // damage modifier for humans.
+float human_dmgmodifier = 1.0f; // damage modifier for humans.
 float human_speed = 1.0f; // speed when not infected
 int human_spawn_time = 2; // spawn time for humans in seconds. Leave "default" for default spawn time of gametype
+e_color_index human_color = COLOR_RED;
 
     // Last Man Variables
-float lastman_dmgmodifier = 1.75f; // damage modifier for the last man
+float lastman_dmgmodifier = 1.35f; // damage modifier for the last man
 int lastman_invistime = 20; // in seconds
 int lastman_invulnerable = 10; // time (in seconds) the last man is invulnerable for: replace with nil to disable
-float lastman_speed = 1.75f; // last man speed
+float lastman_speed = 1.50f; // last man speed
 
     // Booleans
 bool humans_allowed_in_vehis = false; // if this is set to false { humans cannot enter vehicles
+bool zombies_allowed_in_vehis = false; // if this is set to false { zombies cannot enter vehicles.
 bool humans_invisible_on_crouch = false; // if this is set to true { humans will become invisible when they crouch.
+bool zombies_invisible_on_crouch = true; // if this is set to true { zombies will be invisible when they crouch.
 bool infect_on_fall = true; // if this is set to true { people who die from fall damage will become zombies.
 bool infect_on_guardians = false; // if this is set to true { people who get killed by the guardians will become zombies.
 bool infect_on_suicide = true; // if this is set to true { people who kill themselves will become a zombie.
 bool infect_on_betrayal = false; // if this is set to true { people who betray their teammates will become a zombie.
-bool last_man_next_zombie = true; // if this value is true the last man standing becomes the next zombie, if not it's random
-bool zombies_allowed_in_vehis = false; // if this is set to false { zombies cannot enter vehicles.
-bool zombies_invisible_on_crouch = true; // if this is set to true { zombies will be invisible when they crouch.
+bool last_human_next_zombie = true; // if this value is true the last man standing becomes the next zombie, if not it's random
+bool use_old_kill_messages = true; // Set this if you like the OLD zombie infection messages with the 059 zombies.
+
+    // Additional variables.
+bool team_play = false;
+bool starting_equipment_is_generic;
+UINT gametype = -1;
+static const wchar_t teamRedStr[] = L"rt";
+static const wchar_t teamBlueStr[] = L"bt";
+UINT infected[16] = { 0 };
+bool usedFlashlight[16] = { 0 };
+UINT zombie_kills[16] = { 0 };
 
 // Custom messages
 ICIniFile* customMsg;
@@ -161,79 +205,84 @@ static const wchar_t str6_8[] = L"6.8";
 static const wchar_t str6_9[] = L"6.9";
 
 
-static const wchar_t section_str_deaths[] = L"deaths";
-static const wchar_t section_str_infected[] = L"infected";
+static const wchar_t section_str_hint[] = L"hint";
+static const wchar_t section_str_death[] = L"death";
+static const wchar_t section_str_complement[] = L"complement";
+static const wchar_t section_str_new_team[] = L"new team";
 static const wchar_t section_str_misc[] = L"misc";
+static const wchar_t section_str_gametype[] = L"gametype";
 static const wchar_t section_str_command[] = L"command";
-static const wchar_t section_str_welcome[] = L"welcome";
 static const wchar_t section_str_general[] = L"general";
-/*
-// Death / Infect messages
-std::wstring blockteamchange_message = L"Autobalance: You're not allowed to change team.";
-std::wstring falling_infected_message = L"%s fell to his death...";
-std::wstring falling_death_message = L"%s slipped and fell...";
-std::wstring kill_infected_message = L"%s has infected %s";
-std::wstring suicide_infected_message = L"%s lost the will to live...";
-std::wstring suicide_message = L"%s made mistakes...";
-std::wstring teammate_infected_message = L"%s was infected for betraying %s";
-std::wstring guardian_infected_message = L"%s was infected by an angry ghost!";
-std::wstring guardian_death_message = L"";
-std::wstring in_hill_too_long_human_msg = L"%s was infected because they were in the hill too long!";
-std::wstring in_hill_too_long_zombie_msg = L"%s has been killed because they were in the hill too long!";
-std::wstring human_kill_message = L"%s has killed %s";
 
-//Hint Messages
-std::wstring teamkill_message = L"Don't team kill...";
-std::wstring nozombiesleftmessage = L"There are no zombies left. Someone needs to change team or be forced to.";
-std::wstring lastman_message = L"%s is the last human alive and is invisible for %d seconds!";
-std::wstring rejoin_message = L"Please don't leave and rejoin. You've been put back onto your last team.";
-std::wstring zombieinvis_message = L"The zombies are invisible for 30 seconds!";
+        // Hint Messages
+wchar_t blockteamchange_message[INIFILEVALUEMAX] = L"Autobalance: You're not allowed to change team.",
+        teamkill_message[INIFILEVALUEMAX] = L"Don't team kill...",
+        nozombiesleftmessage[INIFILEVALUEMAX] = L"There are no zombies left. Someone needs to change team or someone will be forced to.",
+        lastman_message[INIFILEVALUEMAX] = L"{0:s} is the last human alive and is invisible for {1:2d} seconds!",
+        rejoin_message[INIFILEVALUEMAX] = L"Please don't leave and rejoin. You've been put back onto your last team.",
+        zombieinvis_message[INIFILEVALUEMAX] = L"The zombies are invisible for 20 seconds!",
+        speedburst_begin_message[INIFILEVALUEMAX] = L"**FLASHLIGHT SPEEDBURST USED**",
+        speedburst_end_message[INIFILEVALUEMAX] = L"**FLASHLIGHT SPEED USED. REGAIN IT ON NEXT SPAWN**",
+        block_tree_message[INIFILEVALUEMAX] = L"This tree is blocked.",
+        block_spot_message[INIFILEVALUEMAX] = L"Sorry, this spot has been blocked...",
+        block_glitch_message[INIFILEVALUEMAX] = L"Glitching is not allowed!",
+        nozombiesleft_counter_message[INIFILEVALUEMAX] = L"In {0:2d} seconds a player will be forced to become a zombie.",
 
-// Complement Messages
-std::wstring timer_team_change_msg = L"Thank you. The game will now continue";
-std::wstring zombie_backtap_message = L"Nice backtap!";
+        // Death/Infection Messages
+        falling_infected_message[INIFILEVALUEMAX] = L"{0:s} has been infected by falling",
+        guardian_infected_message[INIFILEVALUEMAX] = L"{0:s} was infected by the guardians",
+        kill_infected_message[INIFILEVALUEMAX] = L"{0:s} has infected {1:s}",
+        teammate_infected_message[INIFILEVALUEMAX] = L"{0:s} was infected for betraying {1:s}",
+        suicide_infected_message[INIFILEVALUEMAX] = L"{0:s} lost the will to live",
+        human_kill_message[INIFILEVALUEMAX] = L"{0:s} has killed {1:s}",
+        falling_death_message[INIFILEVALUEMAX] = L"{0:s} slipped and fell",
+        guardian_death_message[INIFILEVALUEMAX] = L"",
+        teammate_death_message[INIFILEVALUEMAX] = L"{0:s} betrayed {1:s}",
+        suicide_death_message[INIFILEVALUEMAX] = L"{0:s} has killed themself",
+        infected_message[INIFILEVALUEMAX] = L"{0:s} has been infected!",
 
-// New Team Messages
-std::wstring human_message = L"YOU'RE A HUMAN. Survive!";
-std::wstring zombie_message = L"YOU'RE A ZOMBIE. FEED ON HUMANS!";
+        // Complement Messages
+        timer_team_change_msg[INIFILEVALUEMAX] = L"Thank you. The game will now continue",
+        zombie_backtap_message[INIFILEVALUEMAX] = L"Nice backtap!",
 
-// Additional Messages
-std::wstring welcome_message = L"Welcome to Ash Clan Zombies";
-std::wstring koth_additional_welcome_msg = L"The hill is a safezone! Use it for quick getaways!";
-//slayer_additional_welcome_msg = "The nav points are not just for decoration!\nThey will point to the last man surviving!";
+        // New Team Messages
+        human_message[INIFILEVALUEMAX] = L"YOU'RE A HUMAN. Survive!",
+        zombie_message[INIFILEVALUEMAX] = L"YOU'RE A ZOMBIE. FEED ON HUMANS!",
 
-// Block Messages
-std::wstring blocked_tree_message = L"This tree is blocked.";
-std::wstring blocked_spot_message = L"Sorry this spot has been blocked...";
-std::wstring blocked_glitch_message = L"Glitching is not allowed!";
+        // Additional Messages
+        welcome_message[INIFILEVALUEMAX] = L"Welcome to Zombies",
+        koth_additional_welcome_msg[INIFILEVALUEMAX] = L"The hill is a safezone! Use it for quick getaways!",
+        slayer_additional_welcome1_msg[INIFILEVALUEMAX] = L"The nav points are not just for decoration!",
+        slayer_additional_welcome2_msg[INIFILEVALUEMAX] = L"They will point to the last human surviving!",
+        cure_zombie_kill_message[INIFILEVALUEMAX] = L"{0:s} is now a human because they infected 5 times!",
+        game_start_message[INIFILEVALUEMAX] = L"The game has started",
+        zombie_infect_human_message[INIFILEVALUEMAX] = L"You have transmitted the zombie virus to {0:s}",
+        human_infect_begin_message[INIFILEVALUEMAX] = L"YOU ARE INFECTED! Find a healthpack in 45 seconds to survive!",
+        human_infect_counter_message[INIFILEVALUEMAX] = L"YOU ARE INFECTED! Find a healthpack in {0:2d} seconds to survive!",
+        human_infect_end_message[INIFILEVALUEMAX] = L"{0:s} could not find a cure in time!",
+        cure_human_message[INIFILEVALUEMAX] = L"YOU HAVE BEEN CURED!",
 
-// KOTH Messages
-std::wstring koth_in_hill_human_message = L"%s must leave the hill in 10 seconds or they will be infected!";
-std::wstring koth_in_hill_zombie_message = L"%s must leave the hill in 10 seconds or they will be killed!";
-std::wstring koth_in_hill_human_warn_message = L"You have %d seconds to leave the hill!";
-*/
+        // Gametype Messages
+        koth_infect_begin_message[INIFILEVALUEMAX] = L"{0:s} must leave the hill in 10 seconds or they will be infected!",
+        koth_infect_end_message[INIFILEVALUEMAX] = L"{0:s} was infected because they were in the hill too long!",
+        koth_kill_begin_message[INIFILEVALUEMAX] = L"{0:s} must leave the hill in 10 seconds or they will be killed!",
+        koth_kill_end_message[INIFILEVALUEMAX] = L"{0:s} has been killed because they were in the hill too long!",
+        koth_kill_counter_message[INIFILEVALUEMAX] = L"You have {0:2d} seconds to leave the hill!";
+
 
 // Don't modify below variables unless you know what you're doing
-//int cur_zombie_count = 0; //TODO: Need to remove extra cur_zombie_count
 int cur_zombie_count = 0;
 int cur_human_count = 0;
-int alpha_zombie_count = 0;
+UINT alpha_zombie_count = 0;
 //int human_time = {};
-//int cur_players = 0; //Don't use this, intead use pIHaloEngine->globalServer->totalPlayers
-IPlayer::PlayerInfo cur_last_man;
+//int cur_players = 0; //Don't use this, intead use pIHaloEngine->serverHeader->totalPlayers
+PlayerInfo cur_last_human;
 //int last_man_name = 0;
-int processid = 0;
-BYTE game_init = 0;
-bool game_enable = 0;
+//BYTE game_init = 0;
+//bool game_enable = 0;
 bool allow_change = false;
 bool map_reset_boolean = false;
-//int flagball_weap = {};
-//int last_hill_time = {};    //Not even in used...
-//int name_table = {};
-//int inhill_time = {};
-//int fuelrods = {};
-//int activateFlashlight = {};
-//int zombie_kills[16] = {0};
+bool dontModifyDmg = false;
 
 //Modified to improve the Infection gametype flow.
 
@@ -256,27 +305,27 @@ struct dataTable {
 };
 std::vector<dataTable> cacheTable;
 
-#define invisCrouch             0
-#define HumanTimer              1
-#define NewGameTimer            2
-#define MsgTimer                3
-#define SpeedTimer              4
-#define PlayerChangeTimer       5
-#define RemoveLastmanProtection 6
-#define TOTALTIMERS 7
+bool game_started;
+UINT human_time[16];
+UINT last_hill_time[16];
+wchar_t last_human_name[12] = { 0 };
+wchar_t name_table[16][12];
+UINT inhill_time[16];
+UINT gametype_indicator;
 
 int playerChangeCounter=0;
-int timers[TOTALTIMERS];
-IPlayer::PlayerInfo pl_null;
-ident oddball_flag_obj[16];
-vect3 location;
-vect3 velocity_reset;
-IPlayer::PlayerInfo plI_ctf;
-WeaponS* oddball_flag_relocate=NULL;
+PlayerInfo pl_null;
+s_ident oddball_flag_obj[16];
+real_vector3d location;
+real_vector3d velocity_reset;
+PlayerInfo plI_ctf;
+s_weapon* oddball_flag_relocate=NULL;
 
 //Missing values
 int resptime = 0;
-IObject::hTagHeader *camouflage_tag_id,
+hTagHeader *falling_tag_id,
+        *distance_tag_id,
+        *camouflage_tag_id,
         *healthpack_tag_id,
         *overshield_tag_id,
         *fragnade_tag_id,
@@ -298,2941 +347,2667 @@ IObject::hTagHeader *camouflage_tag_id,
         *rocket_ammo_id,
         *shotgun_ammo_id,
         *sniper_ammo_id,
-        *flame_ammo_id;
+        *flame_ammo_id,
+        *fuel_dmg1_id,
+        *fuel_dmg2_id,
+        *fuel_dmg3_id,
+        *fuel_dmg4_id;
 #pragma endregion
 
 #pragma region //RadWolfie's code port to H-Ext plugin.
-void OnFFATeamChange(IPlayer::PlayerInfo plI, char dest_team, int updatecounters);
-void LoadTags() {
-    //TODO: Need support for ball/flag to obtain tag id. And for the rest of the tag ids... Is this really necessary?
-    /*
-    for (int i = 0; i<4; i++) {
-        if (zombie_weapon[i] == "weapons\\ball\\ball" || zombie_weapon[i] == "weapons\\flag\\flag") {
-            oddball_or_flag = gettagid("weap", zombie_weapon[i])
-        }
-    }*/
-    
-    camouflage_tag_id = pIObject->LookupTagTypeName("eqip", "powerups\\active camouflage");
-    healthpack_tag_id = pIObject->LookupTagTypeName("eqip", "powerups\\health pack");
-    overshield_tag_id = pIObject->LookupTagTypeName("eqip", "powerups\\over shield");
-    fragnade_tag_id = pIObject->LookupTagTypeName("eqip", "weapons\\frag grenade\\frag grenade");
-    plasmanade_tag_id = pIObject->LookupTagTypeName("eqip", "weapons\\plasma grenade\\plasma grenade");
-    fragnade_tag_id = pIObject->LookupTagTypeName("eqip", "weapons\\frag grenade\\frag grenade");
-    plasmanade_tag_id = pIObject->LookupTagTypeName("eqip", "weapons\\plasma grenade\\plasma grenade");
-    oddball_tag_id = pIObject->LookupTagTypeName("weap", "weapons\\ball\\ball");
-    flag_tag_id = pIObject->LookupTagTypeName("weap", "weapons\\flag\\flag");
-    rifle_id = pIObject->LookupTagTypeName("weap", "weapons\\assault rifle\\assault rifle");
-    needler_id = pIObject->LookupTagTypeName("weap", "weapons\\needler\\mp_needler");
-    pistol_id = pIObject->LookupTagTypeName("weap", "weapons\\pistol\\pistol");
-    rocket_id = pIObject->LookupTagTypeName("weap", "weapons\\rocket launcher\\rocket launcher");
-    shotgun_id = pIObject->LookupTagTypeName("weap", "weapons\\shotgun\\shotgun");
-    sniper_id = pIObject->LookupTagTypeName("weap", "weapons\\sniper rifle\\sniper rifle");
-    flame_id = pIObject->LookupTagTypeName("weap", "weapons\\flamethrower\\flamethrower");
-    rifle_ammo_id = pIObject->LookupTagTypeName("eqip", "powerups\\assault rifle ammo\\assault rifle ammo");
-    needler_ammo_id = pIObject->LookupTagTypeName("eqip", "powerups\\needler ammo\\needler ammo");
-    pistol_ammo_id = pIObject->LookupTagTypeName("eqip", "powerups\\pistol ammo\\pistol ammo");
-    rocket_ammo_id = pIObject->LookupTagTypeName("eqip", "powerups\\rocket launcher ammo\\rocket launcher ammo");
-    shotgun_ammo_id = pIObject->LookupTagTypeName("eqip", "powerups\\shotgun ammo\\shotgun ammo");
-    sniper_ammo_id = pIObject->LookupTagTypeName("eqip", "powerups\\sniper rifle ammo\\sniper rifle ammo");
-    flame_ammo_id = pIObject->LookupTagTypeName("eqip", "powerups\\flamethrower ammo\\flamethrower ammo");
-    
+
+
+#pragma region Timers section
+typedef enum eTimer {
+    eNONE = -1,
+    eAssignLeftOverZombieWeapon = 0,
+    eAssignLeftOverHumanWeapon,
+    eAssignZombieWeapon,
+    eAssignHumanWeapon,
+    eHaveSpeedTimer,
+    eBumpTimer,
+    eBumpInfection,
+    eCheckGameState,
+    eHumanTimer,
+    eInvisCrouch,
+    eMsgTimer,
+    eNewGameTimer,
+    ePlayerChangeTimer,
+    eRemoveLastManProtection
+} eTimer;
+typedef struct dTimer {
+    UINT TimerID;
+    eTimer eFunc;
+    int machine_index; //(optional field)
+} dTimer;
+std::vector<dTimer> vTimer(0x40);
+
+//Additional field checker
+bool hasPlayerChangeTimer = false;
+
+s_ident lastman_object;
+#pragma endregion
+
+#pragma region Functions section
+//RadWolfie - Approved
+int getalphacount() {
+    // recalculate how many "alpha" zombies there are
+    //int alpha_zombie_count;
+    if (zombie_count < 1)
+        alpha_zombie_count = (int)roundC((pIHaloEngine->serverHeader->totalPlayers * zombie_count) + 0.5);
+    else
+        alpha_zombie_count = zombie_count;
+
+    if (alpha_zombie_count > max_zombie_count)
+        alpha_zombie_count = max_zombie_count;
+
+    return alpha_zombie_count;
 }
-/*int randomRange(int min, int max) {
-    return min + (rand() % (int)(max - min + 1));   //the ONLY effective method, however the first number is always the same... the rest are random, lucky...
-    //return (int(double(rand()) / double(RAND_MAX+1)) * (max - min+1)) + min;    //No good, always zero...
-}*/
-bool object_in_sphere(vect3 objectLoc, vect3 loc, float R) {
+
+//RadWolfie - Approved | except patch is excluded and does not work with multiple halo builds due to different code.
+void InitializeGame() {
+    //RadWolfie - This is just in case someone might initialize this while not hosting the map.
+    if (pIHaloEngine->mapCurrent->type == 1) {
+        cur_zombie_count = 0;
+        cur_human_count = 0;
+        alpha_zombie_count = 0;
+
+        for (std::vector<dTimer>::iterator iTimer = vTimer.begin(); iTimer != vTimer.end(); iTimer++) {
+            pITimer->m_delete(EAOHashID, iTimer->TimerID);
+        }
+        vTimer.clear();
+        hasPlayerChangeTimer = false;
+
+        UINT i;
+        for (i = 0; i < 16; i++) {
+            human_time[i] = 0;
+        }
+        cur_last_human = PlayerInfo();
+        //last_human_name[0] = 0;
+        game_started = false;
+        allow_change = false;
+        for (i = 0; i < 16; i++) {
+            last_hill_time[i] = -1;
+        }
+        for (i = 0; i < 16; i++) {
+            name_table[i][0] = 0;
+        }
+        for (i = 0; i < 16; i++) {
+            inhill_time[i] = -1;
+        }
+        for (i = 0; i < 16; i++) {
+            zombie_kills[i] = 0;
+        }
+
+        // write patches
+        /* This is lua's code.
+        // Not require - H-Ext already provided patch for CTF's repeated message glitch.
+        writebyte(addresses.ctf_msgs_patch, 0xEB)
+        // Not require - See EXTOnPlayerSpawnColor hook event for this process
+        writebyte(addresses.color_patch, 0xEB)
+
+        // Cannot patch due to variety halo builds are different.
+        writebyte(addresses.slayer_score_patch, 0xEB)
+        writebyte(addresses.nonslayer_score_patch, 0xEB)
+        */
+
+        // set color values - See EXTOnPlayerSpawnColor hook event for this process
+
+        // recalculate team counters
+        cur_human_count = pIPlayer->m_get_str_to_player_list(human_team == COLOR_TEAM_BLUE ? teamBlueStr : teamRedStr, nullptr, nullptr);
+        cur_zombie_count = pIPlayer->m_get_str_to_player_list(zombie_team == COLOR_TEAM_BLUE ? teamBlueStr : teamRedStr, nullptr, nullptr);
+
+        // recalculate how many "alpha" zombies there are
+        alpha_zombie_count = getalphacount();
+        team_play = pIHaloEngine->gameTypeLive->isTeamPlay;
+        lastman_object = -1;
+
+        // set gametype specific variables
+        gametype = pIHaloEngine->gameTypeLive->game_stage;
+        gametype_indicator = pIHaloEngine->gameTypeLive->objective_indicator;
+        switch (gametype) {
+            case GAMETYPE_CTF: { // CTF
+                //writedword(addresses.flag_respawn_addr, 0xFFFFFFFF)
+                //TODO: DelayWriteCoords timer is not needed.
+                //UINT id = pITimer->m_add(EAOHashID, nullptr, 0); //0 second
+                //join_team = zombie_team;
+            }
+            case GAMETYPE_SLAYER: { // Slayer
+                //zombie_team = COLOR_BLUE;
+                //human_team = COLOR_RED;
+            }
+            case GAMETYPE_ODDBALL: // Oddball
+                //TODO: Added by RadWolfie - Support oddball anyway.
+            case GAMETYPE_KOTH: { // KOTH
+                //join_team = zombie_team;
+                break;
+            }
+            default: { // Incompatible gametype
+                VARIANT argList[1];
+                VARIANTwstr(&argList[0], pIHaloEngine->gameTypeLive->name);
+                pIPlayer->m_send_custom_message_broadcast(MF_ERROR, L"Incompatible gametype: ", 1, argList);
+                return;
+            }
+        }
+
+        starting_equipment_is_generic = !pIHaloEngine->gameTypeLive->isCustomEquipment;
+
+        UINT id = pITimer->m_add(EAOHashID, nullptr, 30); //1 second
+        if (id)
+            vTimer.push_back({ id, eHumanTimer, -1 });
+
+        id = pITimer->m_add(EAOHashID, nullptr, 6); //200 miliseconds
+        if (id)
+            vTimer.push_back({ id, eInvisCrouch, -1 });
+
+        id = pITimer->m_add(EAOHashID, nullptr, 27); //900 miliseconds
+        if (id)
+            vTimer.push_back({ id, eBumpTimer, -1 });
+
+        id = pITimer->m_add(EAOHashID, nullptr, 27); //200 milliseconds
+        if (id)
+            vTimer.push_back({ id, eCheckGameState, -1 });
+    }
+}
+
+//RadWolfie - Not required.
+//UINT getteamsize(e_color_team_index team) {};
+
+// RadWolfie - Approved
+// Gets the ammo mapId of the weapon, or nil if there's no ammo for the weapon.
+// Accepts the weapon's mapId as an argument.
+// Created by Wizard
+s_ident getAmmoTagId(hTagHeader* mapId) {
+    s_ident ammoTagId = -1;
+    if (mapId == rifle_id) {
+        ammoTagId = rifle_ammo_id->ident;
+    } else if (mapId == needler_id) {
+        ammoTagId = needler_ammo_id->ident;
+    } else if (mapId == pistol_id) {
+        ammoTagId = pistol_ammo_id->ident;
+    } else if (mapId == rocket_id) {
+        ammoTagId = rocket_ammo_id->ident;
+    } else if (mapId == shotgun_id) {
+        ammoTagId = shotgun_ammo_id->ident;
+    } else if (mapId == sniper_id) {
+        ammoTagId = sniper_ammo_id->ident;
+    } else if (mapId == flame_id) {
+        ammoTagId = flame_ammo_id->ident;
+    }
+    return ammoTagId;
+}
+
+//RadWolfie - Approved
+void spawnAmmoForKiller(PlayerInfo killer, PlayerInfo victim) {
+    s_biped* m_biped = (s_biped*)pIObject->m_get_address(victim.plS->CurrentBiped);
+    if (m_biped) {
+        // Don't drop ammo for last killer
+        if (!cur_last_human.mS) {
+
+            // Get coordinates to drop the ammo at.
+            real_vector3d coord = m_biped->sObject.World;
+            coord.z += 1;
+
+            // Get the weapon of the killer so we can check its ammo type.
+            s_weapon* m_weapon = (s_weapon*)pIObject->m_get_address(m_biped->sObject.Weapon);
+            if (m_weapon) {
+                hTagHeader* weapHeader = pIObject->m_lookup_tag(m_biped->sObject.Weapon);
+
+                // Get weapon ammo's mapId of the killer's weapon
+                s_ident tagId = m_weapon->sObject.ModelTag;
+                s_ident ammoTagId = getAmmoTagId(weapHeader);
+                if (ammoTagId.Tag != -1) {
+                    pIObject->m_create(ammoTagId, s_ident(-1), 60, nullptr, &coord);
+                }
+            }
+        }
+    }
+}
+
+//RadWolfie - Not required.
+//void all_players_zombies(PlayerInfo plI) {};
+
+//RadWolfie - Approved
+PlayerInfo ChooseRandomPlayer(e_color_team_index excludeTeam) {
+    UINT randNumber;
+
+    UINT count;
+    PlayerInfoList plList;
+    // loop through all 16 possible spots and add to table
+    count = pIPlayer->m_get_str_to_player_list(excludeTeam == COLOR_TEAM_BLUE ? teamRedStr : teamBlueStr, &plList, nullptr);
+    if (count == 0)
+        return PlayerInfo();
+
+    count--;
+    randNumber = randomRange(0, count);
+    return plList.plList[randNumber];
+}
+
+//RadWolfie - Approved
+void destroyweapons(PlayerInfo plI) {
+    s_biped* pl_biped = (s_biped*)pIObject->m_get_address(plI.plS->CurrentBiped);
+    if (pl_biped) {
+        for (UINT i = 0; i < 4; i++) {
+            if (pl_biped->Weapons[i].Tag!=-1)
+                pIObject->m_destroy(pl_biped->Weapons[i]);
+        }
+    }
+}
+
+//RadWolfie - Approved
+void AddScore(PlayerInfo plI, UINT amount) {
+    //if (!plI.mS)
+        //error
+    human_time[plI.plR->MachineIndex] += amount;
+}
+
+//RadWolfie - Approved
+void LoadTags() {
+    falling_tag_id = pIObject->m_lookup_tag_type_name(TAG_JPT_, "globals\\falling");
+    distance_tag_id = pIObject->m_lookup_tag_type_name(TAG_JPT_, "globals\\distance");
+
+    camouflage_tag_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\active camouflage");
+    healthpack_tag_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\health pack");
+    overshield_tag_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\over shield");
+    fragnade_tag_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "weapons\\frag grenade\\frag grenade");
+    plasmanade_tag_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "weapons\\plasma grenade\\plasma grenade");
+    fragnade_tag_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "weapons\\frag grenade\\frag grenade");
+    plasmanade_tag_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "weapons\\plasma grenade\\plasma grenade");
+    oddball_tag_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\ball\\ball");
+    flag_tag_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\flag\\flag");
+    rifle_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\assault rifle\\assault rifle");
+    needler_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\needler\\mp_needler");
+    pistol_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\pistol\\pistol");
+    rocket_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\rocket launcher\\rocket launcher");
+    shotgun_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\shotgun\\shotgun");
+    sniper_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\sniper rifle\\sniper rifle");
+    flame_id = pIObject->m_lookup_tag_type_name(TAG_WEAP, "weapons\\flamethrower\\flamethrower");
+    rifle_ammo_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\assault rifle ammo\\assault rifle ammo");
+    needler_ammo_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\needler ammo\\needler ammo");
+    pistol_ammo_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\pistol ammo\\pistol ammo");
+    rocket_ammo_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\rocket launcher ammo\\rocket launcher ammo");
+    shotgun_ammo_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\shotgun ammo\\shotgun ammo");
+    sniper_ammo_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\sniper rifle ammo\\sniper rifle ammo");
+    flame_ammo_id = pIObject->m_lookup_tag_type_name(TAG_EQIP, "powerups\\flamethrower ammo\\flamethrower ammo");
+
+    fuel_dmg1_id = pIObject->m_lookup_tag_type_name(TAG_JPT_, "weapons\\plasma_cannon\\effects\\plasma_cannon_explosion");
+    fuel_dmg2_id = pIObject->m_lookup_tag_type_name(TAG_JPT_, "weapons\\plasma_cannon\\effects\\plasma_cannon_misfire");
+    fuel_dmg3_id = pIObject->m_lookup_tag_type_name(TAG_JPT_, "weapons\\plasma_cannon\\effects\\plasma_cannon_trigger");
+    fuel_dmg4_id = pIObject->m_lookup_tag_type_name(TAG_JPT_, "weapons\\plasma_cannon\\impact damage");
+}
+
+//RadWolfie - Extended
+bool must_be_readied[4];
+bool must_be_picked_up[4];
+float melee_dmg_force[4];
+float melee_response_force[4];
+
+struct s_meta_weapon {
+    BYTE unknown1[0x308];   //0x000
+    bool bitfield0 : 1;     //0x308
+    bool bitfield1 : 1;
+    bool bitfield2 : 1;
+    bool must_be_readied : 1;
+    bool bitfield4 : 1;
+    bool bitfield5 : 1;
+    bool bitfield6 : 1;
+    bool must_be_picked_up : 1;
+    BYTE unknown2[0x8B];    //0x309
+};
+struct s_meta_melee {
+    BYTE unknown1[0x1F4];   //0x000
+    float force;            //0x1F4
+};
+
+//RadWolfie - Approved | except not sure about bitfield offset is correct. (It also edited the tagset too. So, once unload it remain as effect until map change.)
+// This function will set the zombie weapon attributes
+// It will loop through all the zombie weapons
+// and give a 10x force to the zombie weapon's melee
+void setZombieWeaponAttributes() {
+    for (int i = 0; i < 4; i++) {
+        if (zombie_weapon[i] != nullptr && zombie_weapon[i][0] != 0) {
+            hTagHeader* weapon_tag = pIObject->m_lookup_tag_type_name(TAG_WEAP, zombie_weapon[i]);
+            if (weapon_tag) {
+                zweapon[i] = weapon_tag->ident;
+                if (weapon_tag->ident.Tag >= 0xE0000000 && weapon_tag->ident.Tag <= 0xF0000000) {
+                    s_meta_weapon* weapon_meta = (s_meta_weapon*)weapon_tag->group_meta_tag;
+                    must_be_readied[i] = weapon_meta->must_be_readied;
+                    weapon_meta->must_be_readied = 0;
+                    must_be_picked_up[i] = weapon_meta->must_be_picked_up;
+                    weapon_meta->must_be_picked_up = 1;
+
+                    DWORD melee_dmg_mapId = *(DWORD*)(weapon_meta + 0x394 + 0xC);
+                    if (melee_dmg_mapId && melee_dmg_mapId >= 0xD0000000 && melee_dmg_mapId <= 0xF0000000) {
+                        hTagHeader* melee_dmg_tag = pIObject->m_lookup_tag(melee_dmg_mapId);
+                        s_meta_melee* melee_dmg_meta = (s_meta_melee*)melee_dmg_tag->group_meta_tag;
+                        melee_dmg_force[i] = melee_dmg_meta->force;
+                        melee_dmg_meta->force = 10.0f;
+                    }
+                    DWORD melee_response_mapId = *(DWORD*)(weapon_meta + 0x3A4 + 0xC);
+                    if (melee_response_mapId && melee_response_mapId >= 0xD0000000 && melee_response_mapId <= 0xF0000000) {
+                        hTagHeader* melee_response_tag = pIObject->m_lookup_tag(melee_response_mapId);
+                        s_meta_melee* melee_response_meta = (s_meta_melee*)melee_response_tag->group_meta_tag;
+                        melee_response_force[i] = melee_response_meta->force;
+                        melee_response_meta->force = 10.0f;
+                    }
+                }
+            } else zweapon[i] = -1;
+        } else zweapon[i] = 0;
+    }
+}
+
+void unsetZombieWeaponAttributes() {
+    for (int i = 0; i < 4; i++) {
+        if (zombie_weapon[i] != nullptr && zombie_weapon[i][0] != 0) {
+            hTagHeader* weapon_tag = pIObject->m_lookup_tag_type_name(TAG_WEAP, zombie_weapon[i]);
+            if (weapon_tag) {
+                zweapon[i] = weapon_tag->ident;
+                if (weapon_tag->ident.Tag >= 0xE0000000 && weapon_tag->ident.Tag <= 0xF0000000) {
+                    s_meta_weapon* weapon_meta = (s_meta_weapon*)weapon_tag->group_meta_tag;
+                    weapon_meta->must_be_readied = must_be_readied[i];
+                    weapon_meta->must_be_picked_up = must_be_picked_up[i];
+
+                    DWORD melee_dmg_mapId = *(DWORD*)(weapon_meta + 0x394 + 0xC);
+                    if (melee_dmg_mapId && melee_dmg_mapId >= 0xD0000000 && melee_dmg_mapId <= 0xF0000000) {
+                        hTagHeader* melee_dmg_tag = pIObject->m_lookup_tag(melee_dmg_mapId);
+                        s_meta_melee* melee_dmg_meta = (s_meta_melee*)melee_dmg_tag->group_meta_tag;
+                        melee_dmg_meta->force = melee_dmg_force[i];
+                    }
+                    DWORD melee_response_mapId = *(DWORD*)(weapon_meta + 0x3A4 + 0xC);
+                    if (melee_response_mapId && melee_response_mapId >= 0xD0000000 && melee_response_mapId <= 0xF0000000) {
+                        hTagHeader* melee_response_tag = pIObject->m_lookup_tag(melee_response_mapId);
+                        s_meta_melee* melee_response_meta = (s_meta_melee*)melee_response_tag->group_meta_tag;
+                        melee_response_meta->force = melee_response_force[i];
+                    }
+                }
+            } else zweapon[i] = -1;
+        } else zweapon[i] = 0;
+    }
+
+}
+
+//RadWolfie - Approved
+// This function basically 'sets' a human's traits.
+// It CAN convert a zombie to a human, or simply set the traits of a human.
+void makehuman(PlayerInfo plI, bool forcekill) {
+    // change the player's speed to human speed.
+    // Should not be in the if statement because if statement is ONLY for changing teams IF they are a zombie.
+    plI.plS->VelocityMultiplier = human_speed;
+
+    // Check if we need to change their team.
+    if (plI.plR->Team == zombie_team) {
+
+        // Change their team.
+        pIPlayer->m_change_team(&plI, human_team, forcekill);
+
+    // Player is already a human, let's assign their color and possibly kill them... slowly...
+    } else {
+        if (forcekill)
+            pIObject->m_kill(plI.plS->CurrentBiped);
+    }
+}
+
+//RadWolfie - Approved
+// This function basically 'sets' a zombie's traits.
+// It CAN convert a human to a zombie, or simply set the traits of a zombie.
+void makezombie(PlayerInfo plI, bool forcekill) {
+    // change the player's speed to zombie speed.
+    // Should not be in the if statement because if statement is ONLY for changing teams IF they are a zombie.
+    plI.plS->VelocityMultiplier = zombie_speed;
+
+    // Make sure the player is a human before we make them zombie.
+    if (plI.plR->Team == human_team) {
+
+        // Change their team.
+        pIPlayer->m_change_team(&plI, zombie_team, forcekill);
+
+    // Player is already a zombie, let's assign their color and possibly kill them.
+    } else {
+        if (forcekill)
+            pIObject->m_kill(plI.plS->CurrentBiped);
+    }
+}
+
+//RadWolfie - Approved
+void noZombiesLeft() {
+    if (team_play) {
+        if (!hasPlayerChangeTimer) {
+            allow_change = true;
+            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, nozombiesleftmessage, 0, nullptr);
+            UINT id = pITimer->m_add(EAOHashID, nullptr, 30);    //1 seconds
+            if (id) {
+                vTimer.push_back({ id, ePlayerChangeTimer, -1 });
+                hasPlayerChangeTimer = true;
+            }
+        }
+    } else {
+        // pick a human and make them zombie.
+        PlayerInfo newZomb = ChooseRandomPlayer(zombie_team);
+        if (newZomb.plS) {
+            makezombie(newZomb, true);
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &newZomb, zombie_message, 0, nullptr);
+        }
+    }
+}
+
+//RadWolfie - Approved
+bool check_in_sphere(real_vector3d objectLoc, real_vector3d loc, float R) {
     bool Pass = false;
     if (pow(loc.x - objectLoc.x, 2) + pow(loc.y - objectLoc.y, 2) + pow(loc.z - objectLoc.z, 2) <= R) {
         Pass = true;
     }
     return Pass;
 }
-void all_players_zombies(IPlayer::PlayerInfo plI) {
-    // if there is a last man, store their ip
-    if (plI.mS) {
-        //last_man_name = getname(player);
-        // write the ip to file
-    }
-    // move onto the next map
-    pIHaloEngine->Exec("sv_map_next");
-}
-void takenavsaway() {
-    util::dynamicStack<IPlayer::PlayerInfo> plList;
-    pIPlayer->StrToPlayerList(L"*", plList, NULL);
-    for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-        plI->plS->killInOrderObjective=plI->plS->PlayerIndex;
+
+//RadWolfie - Approved
+void WriteNavsToZombies(PlayerInfo plI) {
+    PlayerInfoList plList;
+    UINT count = pIPlayer->m_get_str_to_player_list(zombie_team == COLOR_TEAM_BLUE ? teamBlueStr : teamRedStr, &plList, nullptr);
+    for (UINT i = 0; i < count; i++) {
+        plList.plList[i].plS->killInOrderObjective.index = plI.plR->PlayerIndex;
+        plList.plList[i].plS->killInOrderObjective.salt = plI.plS->PlayerID;
     }
 }
-void makehuman(IPlayer::PlayerInfo plI, bool forcekill, int updatecounters=0) {
-    //TODO: Is this even neccessary?
-    /*if (pIHaloEngine->gameTypeLive->GameStage == GAMETYPE_SLAYER) {
-        pIPlayer->ChangeTeam(plI, human_team, forcekill);
-        //writebyte(getplayer(player) + 0x20, human_team)
-    }*/
-    // change the player's speed
-    plI.plS->VelocityMultiplier=human_speed;
-    
-    for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-        if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-            if (plI.plS->Team==zombie_team) {
-                cachePlayer->isZombie=false;
-                pIPlayer->changeTeam(plI, human_team, forcekill);
-                if (!pIHaloEngine->gameTypeLive->isTeamPlay) {
-                    OnFFATeamChange(plI, human_team, updatecounters);
-                }
-            }
-            break;
-        }
-    }
-}
-void makezombie(IPlayer::PlayerInfo plI, bool forcekill, int updatecounters=0) {
-    //TODO: Is this even neccessary?
-    /*if (pIHaloEngine->gameTypeLive->GameStage == GAMETYPE_SLAYER) {
-        plI.plS->Team=zombie_team;
-        //writebyte(getplayer(player) + 0x20, zombie_team)
-    }*/
-    // change the player's speed
-    plI.plS->VelocityMultiplier=zombie_speed;
-    
-    for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-        if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-            if (plI.plS->Team!=zombie_team) {
-                cachePlayer->isZombie=true;
-                pIPlayer->changeTeam(plI, zombie_team, forcekill);
-                if (!pIHaloEngine->gameTypeLive->isTeamPlay) {
-                    OnFFATeamChange(plI, zombie_team, updatecounters);
-                }
-            }
-            break;
-        }
-    }
-}
-IPlayer::PlayerInfo ChooseRandomPlayer(char excludeTeam) {
-    // loop through all 16 possible spots and add to table
-    bool isChecked[16] = {0};
-    char randNumber;
-    IPlayer::PlayerInfo chosen;
-    
-    int count=0;
-    util::dynamicStack<IPlayer::PlayerInfo> plList;
-    pIPlayer->StrToPlayerList(L"*", plList, NULL);
-    for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-        count++;
-    }
-    count--;
-    util::dynamicStack<IPlayer::PlayerInfo>::iterator plI_begin = plList.begin();
-    util::dynamicStack<IPlayer::PlayerInfo>::iterator plI_iter;
-    while(1) {
-        randNumber = randomRange(0, count);
-        //randNumber = rand()%count;
-        pIPlayer->sendCustomMsgBroadcast(MSG_INFO, L"Test random number: %d - count:%d", randNumber, count);
-        if (!isChecked[randNumber]) {
-            plI_iter=plI_begin+randNumber;
-            if (plI_iter->plS && plI_iter->plS->Team!=excludeTeam)
-                return *plI_iter;
-            else
-                isChecked[randNumber] = 1;
-        }
-        randNumber=0;
-        for (char i=0; i<=count; i++) {
-            if (isChecked[i])
-                randNumber+=1;
-        }
-        if (randNumber==count)
-            break;
-    }
-    chosen = IPlayer::PlayerInfo();
-    return chosen;
-}
-void noZombiesLeft() {
-    wchar_t msg[256];
-    if (pIHaloEngine->gameTypeLive->isTeamPlay) {
-        if (timers[PlayerChangeTimer]==-1) {
-            allow_change = true;
-            customMsg->ValueGet(str1_2, msg, section_str_misc);
-            pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg);//nozombiesleftmessage.c_str());
-            timers[PlayerChangeTimer] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 300);    //10 seconds
-            //player_change_timer = registertimer(1000, "PlayerChangeTimer")
-        }
-    } else {
-        // pick a human and make them zombie.
-        IPlayer::PlayerInfo newZomb = ChooseRandomPlayer(zombie_team);
-        if (newZomb.plS) {
-            makezombie(newZomb, true);
-            customMsg->ValueGet(str1_8, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, newZomb, msg /*zombie_message.c_str()*/);
-        }
-    }
-}
+
+//RadWolfie - Approved | except unsure about invulnerable bit offset.
 void onlastman() {
     // lookup the last man
-    IPlayer::PlayerInfo lastManCheck;
-    for(char x=0; x<16; x++) {
-        lastManCheck=pIPlayer->getPlayerMindex(x);
-        if (lastManCheck.plS) {
-            if (lastManCheck.plA->Team!=zombie_team) {
-                cur_last_man = lastManCheck;
-                //if (pIHaloEngine->gameTypeLive->GameStage==GAMETYPE_SLAYER)
-                    //WriteNavsToZombies(); //TODO: Unable to do this since there's no way to set the nav base on Wiz's offset... Need more research...
-                //if gametype == "Slayer" then WriteNavsToZombies(x) end
-                // give the last man speed and extra ammo
-                lastManCheck.plS->VelocityMultiplier=lastman_speed;
-                // find the last man's weapons
-                BipedS* pl_biped = (BipedS*)pIObject->GetObjectAddress(lastManCheck.plS->CurrentBiped);
-                if (!pl_biped)
-                    continue;
-                for (char give=0; give<4; give++) {
-                    WeaponS* pl_weapon = (WeaponS*)pIObject->GetObjectAddress(pl_biped->Equipments[give]);
-                    if (!pl_weapon)
-                        continue;
-                    pl_weapon->BulletCountInRemainingClips = 132;
-                    pl_weapon->BulletCountInCurrentClip = 100;
-                    pIObject->Update(pl_biped->Equipments[give]);
+    PlayerInfo lastManCheck;
+    PlayerInfoList plList;
+    s_biped* m_biped;
+    s_weapon* m_weapon;
+    UINT i = pIPlayer->m_get_str_to_player_list(human_team==COLOR_TEAM_BLUE ? teamBlueStr : teamRedStr, &plList, nullptr);
+    if (i == 0)
+        return;
+    i--;
+    //for is not required since m_get_str_to_player_list can get team list. Plus it only need to get one human, so "for" isn't even needed.
+    //for (UINT i=0; i < count; i++) {
+        // set the last human global variable
+        cur_last_human = plList.plList[i];
 
+        // Write the navs of zombies to the last man.
+        if (gametype == GAMETYPE_SLAYER) { // Slayer
+            WriteNavsToZombies(cur_last_human);
+        }
+        // give the last human speed and extra ammo
+        cur_last_human.plS->VelocityMultiplier = lastman_speed;
+
+        // find the last human's weapons
+        m_biped = (s_biped*)pIObject->m_get_address(cur_last_human.plS->CurrentBiped);
+        if (m_biped) {
+            if (lastman_invulnerable) {
+
+                // setup the invulnerable timer
+                m_biped->sObject.noCollision = 1;
+                lastman_object = cur_last_human.plS->CurrentBiped;
+                UINT id = pITimer->m_add(EAOHashID, &cur_last_human, lastman_invulnerable * 33);
+                if (id)
+                    vTimer.push_back({ id, eRemoveLastManProtection, -1 });
+            }
+
+            // Give all weapons infinite ammo
+            for (UINT w = 0; w < 4; w++) {
+                m_weapon = (s_weapon*)pIObject->m_get_address(m_biped->Weapons[w]);
+                if (m_weapon) {
+                    // set the ammo
+                    m_weapon->BulletCountInRemainingClips = 0x7FFF;
+                    m_weapon->BulletCountInCurrentClip = 0x7FFF;
+                    pIObject->m_update(m_biped->Weapons[w]);
+                }
+            }
+        }
+    //}
+    if (cur_last_human.mS) {
+        VARIANT argList[2];
+        VARIANTwstr(&argList[0], cur_last_human.plS->Name);
+        VARIANTint(&argList[1], lastman_invistime);
+        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, lastman_message, 2, argList);
+        pIPlayer->m_apply_camo(&cur_last_human, lastman_invistime);
+    }
+}
+
+//RadWolfie - Approved
+bool PlayerInHill(PlayerInfo plI) {
+    if (plI.plS->CurrentBiped.Tag != -1 && pIHaloEngine->gameTypeGlobals->kothGlobal.isInHill[plI.plR->PlayerIndex]) {
+        return true;
+    }
+    return false;
+}
+
+//RadWolfie - Approved
+void takenavsaway() {
+    PlayerInfoList plList;
+    UINT count = pIPlayer->m_get_str_to_player_list(L"*", &plList, nullptr);
+    for (UINT i = 0; i < count; i++) {
+        //TODO: killInOrderObjective set to -1 method does not show it is working for both PC & CE...Wizard said it is working in PC.
+        //plList.plList[i].plS->killInOrderObjective.Tag = -1;
+        plList.plList[i].plS->killInOrderObjective.salt = plList.plList[i].plS->PlayerID; //Alternate workaround for now.
+        plList.plList[i].plS->killInOrderObjective.index = plList.plList[i].plR->PlayerIndex; //Alternate workaround for now.
+    }
+}
+
+//RadWolfie - Not required.
+//PlayerInfoList getplayertable(excludeTeam) {};
+
+//RadWolfie - Not required.
+//bool getteamplay() {};
+
+//RadWolfie - Not required.
+//UINT, UINT getteamsizes() {};
+
+//RadWolfie - Not required.
+//UINT getcolorval(color) {};
+
+//RadWolfie - Not required.
+//UINT getPreferredColor(playerId) {};
+
+//RadWolfie - Not required, it is done internally.
+//changeteam(playerId, forcekill) {};
+
+//RadWolfie - Not required.
+//getRandomColorTeam(cur_color) {};
+
+//RadWolfie - Not required. These are just extras...
+//objectidtoplayer(objectId) {};
+//getplayerobject(playerId) {};
+//getplayervehicleid(playerId) {};
+//getplayervehicle(playerId) {};
+//getplayerweaponid(playerId, slot) {};
+//getplayerweapon(playerId, slot) {};
+#pragma endregion
+
+#pragma region Timers section
+
+typedef struct assignData {
+    int clipcount;
+    int ammocount;
+    float batterycount;
+} assignData;
+assignData AssignLeftoverZombieWeaponsData[16] = { 0 };
+//RadWolfie - Approved | This is not needed, use hook func "EXTOnWeaponAssignmentDefault" and "EXTOnWeaponAssignmentCustom" instead.
+// basically this timer assigns the tertiary and quarternary weapons to zombies if specified at the top
+// this is needed since onweaponassignment isn't called for tertiary and quartenary weapons
+void AssignLeftoverZombieWeapons(int index) {
+    s_ident weaponId;
+    PlayerInfo plI;
+
+    if (!(index >= 0 && index <= 15))
+        return;
+    assignData* data = AssignLeftoverZombieWeaponsData + index;
+
+    if (!pIPlayer->m_get_m_index(index, &plI, 1))
+        return;
+    s_biped* m_biped = (s_biped*)pIObject->m_get_address(plI.plS->CurrentBiped);
+    if (m_biped) {
+        if (zweapon[2].Tag) {
+            if (pIObject->m_create(zweapon[2], s_ident(-1), 60, &weaponId, &real_vector3d(5, 2, 2))) {
+                s_weapon* m_weapon = (s_weapon*)pIObject->m_get_address(weaponId);
+                if (m_weapon) {
+
+                    // set the ammo
+                    m_weapon->BulletCountInRemainingClips = data->ammocount;
+                    m_weapon->BulletCountInCurrentClip = data->clipcount;
+                    m_weapon->ammoBattery = abs(data->batterycount - 1);
+
+                    // force it to sync
+                    pIObject->m_update(weaponId);
+                }
+            }
+        }
+
+        // make sure the script user isn't retarded so we don't get errors
+        if (zweapon[2].Tag) {
+            // create the quarternary weapon
+            if (pIObject->m_create(zweapon[3], s_ident(-1), 60, &weaponId, &real_vector3d(1, 1, 1))) {
+                s_weapon* m_weapon = (s_weapon*)pIObject->m_get_address(weaponId);
+                // make sure createobject didn't screw up
+                if (m_weapon) {
+
+                    // assign the weapon to the player
+                    pIObject->m_equipment_assign(plI.plS->CurrentBiped, weaponId);
+
+                    // set the ammo
+                    m_weapon->BulletCountInRemainingClips = data->ammocount;
+                    m_weapon->BulletCountInCurrentClip = data->clipcount;
+                    m_weapon->ammoBattery = abs(data->batterycount - 1);
+
+                    // force it to sync
+                    pIObject->m_update(weaponId);
+                }
+            }
+        }
+    }
+}
+
+assignData AssignLeftoverHumanWeaponsData[16] = { 0 };
+//RadWolfie - Approved | This is not needed, use hook func "EXTOnWeaponAssignmentDefault" and "EXTOnWeaponAssignmentCustom" instead.
+// basically this timer assigns the tertiary and quarternary weapons to zombies if specified at the top
+// this is needed since onweaponassignment isn't called for tertiary and quartenary weapons
+void AssignLeftoverHumanWeapons(int index) {
+    s_ident weaponId;
+    PlayerInfo plI;
+
+    if (!(index >= 0 && index <= 15))
+        return;
+    assignData* data = AssignLeftoverHumanWeaponsData + index;
+
+    if (!pIPlayer->m_get_m_index(index, &plI, 1))
+        return;
+    s_biped* m_biped = (s_biped*)pIObject->m_get_address(plI.plS->CurrentBiped);
+    if (m_biped) {
+        if (hweapon[2].Tag) {
+            if (pIObject->m_create(hweapon[2], s_ident(-1), 60, &weaponId, &real_vector3d(5, 2, 2))) {
+                s_weapon* m_weapon = (s_weapon*)pIObject->m_get_address(weaponId);
+                if (m_weapon) {
+
+                    // set the ammo
+                    m_weapon->BulletCountInRemainingClips = data->ammocount;
+                    m_weapon->BulletCountInCurrentClip = data->clipcount;
+                    m_weapon->ammoBattery = abs(data->batterycount - 1);
+
+                    // force it to sync
+                    pIObject->m_update(weaponId);
+                }
+            }
+        }
+
+        // make sure the script user isn't retarded so we don't get errors
+        if (hweapon[3].Tag) {
+            // create the quarternary weapon
+            if (pIObject->m_create(hweapon[3], s_ident(-1), 60, &weaponId, &real_vector3d(1, 1, 1))) {
+                s_weapon* m_weapon = (s_weapon*)pIObject->m_get_address(weaponId);
+                // make sure createobject didn't screw up
+                if (m_weapon) {
+
+                    // assign the weapon to the player
+                    pIObject->m_equipment_assign(plI.plS->CurrentBiped, weaponId);
+
+                    // set the ammo
+                    m_weapon->BulletCountInRemainingClips = data->ammocount;
+                    m_weapon->BulletCountInCurrentClip = data->clipcount;
+                    m_weapon->ammoBattery = abs(data->batterycount - 1);
+
+                    // force it to sync
+                    pIObject->m_update(weaponId);
+                }
+            }
+        }
+    }
+}
+
+assignData AssignZombieWeaponsData[16] = { 0 };
+//RadWolfie - Approved | This is not needed, use hook func "EXTOnWeaponAssignmentDefault" and "EXTOnWeaponAssignmentCustom" instead.
+bool AssignZombieWeapons(int index, UINT count) {
+    PlayerInfo plI;
+    s_ident weaponId;
+
+    if (!(index >= 0 && index <= 15))
+        return false;
+    assignData* data = AssignZombieWeaponsData + index;
+
+    if (!pIPlayer->m_get_m_index(index, &plI, 1))
+        return false;
+    s_biped* m_biped = (s_biped*)pIObject->m_get_address(plI.plS->CurrentBiped);
+    if (m_biped) {
+        // count is increased everytime the timer is called
+        if (count == 1) {
+            // gets rid of any weapons a zombie is holding
+            destroyweapons(plI);
+        }
+        if (zweapon[count-1].Tag) {
+            if (pIObject->m_create(zweapon[count-1], s_ident(0), 60, &weaponId, &real_vector3d(1, 1, 1))) {
+                s_weapon* m_weapon = (s_weapon*)pIObject->m_get_address(weaponId);
+                if (m_weapon) {
+
+                    // Assign the weapon to the player.
+                    pIObject->m_equipment_assign(plI.plS->CurrentBiped, weaponId);
+
+
+                    // set the ammo
+                    m_weapon->BulletCountInRemainingClips = data->ammocount;
+                    m_weapon->BulletCountInCurrentClip = data->clipcount;
+                    m_weapon->ammoBattery = 1.0f;
+
+                    // force it to sync
+                    pIObject->m_update(weaponId);
+                }
+            }
+            if (count < 4)
+                return true;
+            else
+                return false;
+        }
+    }
+    return false;
+}
+
+assignData AssignHumanWeaponsData[16] = { 0 };
+//RadWolfie - Approved | This is not needed, use hook func "EXTOnWeaponAssignmentDefault" and "EXTOnWeaponAssignmentCustom" instead.
+bool AssignHumanWeapons(int index, UINT count) {
+    PlayerInfo plI;
+    s_ident weaponId;
+
+    if (!(index >= 0 && index <= 15))
+        return false;
+    assignData* data = AssignHumanWeaponsData + index;
+
+    if (!pIPlayer->m_get_m_index(index, &plI, 1))
+        return false;
+    s_biped* m_biped = (s_biped*)pIObject->m_get_address(plI.plS->CurrentBiped);
+    if (m_biped) {
+        // count is increased everytime the timer is called
+        if (count == 1) {
+            // gets rid of any weapons a zombie is holding
+            destroyweapons(plI);
+        }
+        if (hweapon[count-1].Tag) {
+            if (pIObject->m_create(hweapon[count-1], s_ident(0), 60, &weaponId, &real_vector3d(1, 1, 1))) {
+                s_weapon* m_weapon = (s_weapon*)pIObject->m_get_address(weaponId);
+                if (m_weapon) {
+
+                    // Assign the weapon to the player.
+                    pIObject->m_equipment_assign(plI.plS->CurrentBiped, weaponId);
+
+
+                    // set the ammo
+                    m_weapon->BulletCountInRemainingClips = data->ammocount;
+                    m_weapon->BulletCountInCurrentClip = data->clipcount;
+                    m_weapon->ammoBattery = 1.0f;
+
+                    // force it to sync
+                    pIObject->m_update(weaponId);
+                }
+            }
+            if (count < 4)
+                return true;
+            else
+                return false;
+        }
+    }
+    return false;
+}
+
+//RadWolfie - Approved | Need to setup custom input for custom message to client's console.
+void haveSpeedTimerFunc(int index) {
+    PlayerInfo plI;
+
+    if (!pIPlayer->m_get_m_index(index, &plI, 1))
+        return;
+
+    pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, speedburst_end_message, 0, nullptr);
+    if (plI.plR->Team == zombie_team) {
+        plI.plS->VelocityMultiplier = zombie_speed;
+    } else {
+        plI.plS->VelocityMultiplier = human_speed;
+    }
+}
+
+typedef struct bumpInfectionData {
+    PlayerInfo virused_player;
+    PlayerInfo zombie_player;
+} bumpInfectionData;
+bumpInfectionData bumpInfectionTimer[16];
+
+//RadWolfie - Approved
+void bumpTimerFunc() {
+    // Last human cannot be infected by bump virus.
+    if (!cur_last_human.mS) {
+        PlayerInfoList plList;
+        UINT count = pIPlayer->m_get_str_to_player_list(L"*", &plList, nullptr);
+        s_biped* m_biped;
+        s_biped* m_bump_biped;
+        PlayerInfo bumpPlayer;
+        VARIANT argList[1];
+        for (UINT i = 0; i < count; i++) {
+            m_biped = (s_biped*)pIObject->m_get_address(plList.plList[i].plS->CurrentBiped);
+            if (m_biped) {
+                m_bump_biped = (s_biped*)pIObject->m_get_address(m_biped->bump_objectId);
+                if (m_bump_biped) {
+
+                    // Check if object is another biped (player)
+                    if (m_bump_biped->sObject.objType == 0) {
+                        pIPlayer->m_get_ident(m_bump_biped->sObject.Player, &bumpPlayer);
+                        if (bumpPlayer.mS) {
+
+                            // Make sure a zombie is being bumped by a human, or vice versa.
+                            // Also make sure a human isn't bumping another human (ffa)
+                            if (plList.plList[i].plR->Team != bumpPlayer.plR->Team && (bumpPlayer.plR->Team == zombie_team || plList.plList[i].plR->Team == zombie_team)) {
+
+                                // Only humans can be virused.
+                                PlayerInfo virused_player;
+
+                                PlayerInfo zombie_player;
+
+                                // Check if bumped player is a zombie
+                                if (bumpPlayer.plR->Team == zombie_team) {
+                                    virused_player = plList.plList[i];
+                                    zombie_player = bumpPlayer;
+                                } else {
+                                    virused_player = bumpPlayer;
+                                    zombie_player = plList.plList[i];
+                                }
+
+                                if (!infected[virused_player.plR->MachineIndex]) {
+                                    VARIANTwstr(&argList[0], virused_player.plR->PlayerName);
+                                    pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &zombie_player, zombie_infect_human_message, 1, argList);
+                                    pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &virused_player, human_infect_begin_message, 0, nullptr);
+                                    
+                                    UINT id = pITimer->m_add(EAOHashID, &virused_player, 30); // 1 second
+                                    if (id)
+                                        vTimer.push_back({ id, eBumpInfection, virused_player.plR->MachineIndex });
+
+                                    bumpInfectionTimer[virused_player.plR->MachineIndex].virused_player = virused_player;
+                                    bumpInfectionTimer[virused_player.plR->MachineIndex].zombie_player = zombie_player;
+                                    infected[virused_player.plR->MachineIndex] = 45;
+                                }
+                            }
+
+                            // Bump needs to be reset to none.
+                            m_biped->bump_objectId = -1;
+                            m_bump_biped->bump_objectId = -1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    //Always loop timer.
+    //return true;
+}
+
+//RadWolfie - Approved
+// Known Issue: If the causer leaves, and then another player rejoins with the same playerId
+// they will be causing the infection to this player. (will fix probably later)
+bool bumpInfection(int index, UINT count) {
+    VARIANT argList[1];
+
+    if (!(index >= 0 && index <= 15))
+        return false;
+    bumpInfectionData* data = bumpInfectionTimer + index;
+
+    UINT* infectCount = &infected[data->virused_player.plR->MachineIndex];
+    if (*infectCount) {
+        if (count % 5 == 0) {
+            *infectCount -= 5;
+            if (*infectCount <= 0) {
+                *infectCount = 0; //RadWolfie - extra precautious.
+                pIPlayer->m_change_team(&data->virused_player, zombie_team, true);
+                //makezombie(data->virused_player, true); //RadWolfie - I think this is necessary... change team function shouldn't be happening.
+                VARIANTwstr(&argList[0], data->virused_player.plR->PlayerName);
+                pIPlayer->m_send_custom_message_broadcast(MF_BLANK, human_infect_end_message, 1, argList);
+                return false;
+            }
+            VARIANTuint(&argList[0], *infectCount);
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &data->virused_player, human_infect_counter_message, 1, argList);
+        }
+        s_biped* m_biped_infected = (s_biped*)pIObject->m_get_address(data->virused_player.plS->CurrentBiped);
+        s_biped* m_biped_zombie = (s_biped*)pIObject->m_get_address(data->zombie_player.plS->CurrentBiped);
+        if (m_biped_infected) {
+            if (*infectCount == 1) {
+                m_biped_infected->sObject.Health = 1.0f;
+            }
+
+            //RadWolfie - 2 ^ 5 which is 7 decimal, aka 0.0-0.2 bitfield offset. However, bitfield 0.2 cause instant death.
+            // Wizard wants to ignore shield. So, let's go with that instead.
+            objDamageFlags flags = { 0 }; 
+            flags.ignoreShield = 1;
+
+            if (m_biped_zombie) {
+                // We don't want ondamagelookup to use damage modifiers.
+                dontModifyDmg = true;
+
+                // Causer infected this player, so make the damage come from the causing playerId.
+                pIObject->m_apply_damage_generic(data->virused_player.plS->CurrentBiped, data->zombie_player.plS->CurrentBiped, 0.01f, flags);
+                dontModifyDmg = false;
+            } else {
+                // We don't want ondamagelookup to use damage modifiers.
+                dontModifyDmg = true;
+
+                // Causer is dead, do not apply damage from the causer.
+                pIObject->m_apply_damage_generic(data->virused_player.plS->CurrentBiped, data->virused_player.plS->CurrentBiped, 0.01f, flags);
+                dontModifyDmg = false;
+
+            }
+        }
+    } else
+        return false;
+    return true;
+}
+
+void checkgamestate(int index) {
+    PlayerInfo plI;
+
+    pIPlayer->m_get_m_index(index, &plI, 1);
+
+    // check if the game has started yet
+    if (game_started) {
+
+        // if no humans, but there are zombies, end the game
+        if (cur_human_count == 0 && cur_zombie_count > 0) {
+            if (plI.mS)
+                memcpy(last_human_name, plI.plR->PlayerName, 26); // all_players_zombies(plI);
+                pIHaloEngine->m_map_next();
+            game_started = false;
+        } else if (cur_human_count > 1 && cur_zombie_count == 0) {
+            noZombiesLeft();
+        } else if (cur_human_count == 1 && cur_zombie_count > 0 && !cur_last_human.mS) {
+            onlastman();
+        } else if (cur_last_human.mS && zombie_count == 0) {
+            makehuman(cur_last_human, false);
+            cur_last_human = PlayerInfo();
+        } else if (cur_last_human.mS && cur_human_count > 1) {
+            if (gametype == GAMETYPE_SLAYER) { //Slayer
+                takenavsaway();
+            }
+            makehuman(cur_last_human, false);
+            cur_last_human = PlayerInfo();
+        }
+    }
+}
+
+//RadWolfie - Override CTF's flags is not needed, can be used in a gametype.
+// void DelayWriteCoords() {}
+
+//RadWolfie - Approved | Need to check the player score system, since there is a patch in Wizard's lua script.
+bool HumanTimer() {
+    if (map_reset_boolean) {
+        map_reset_boolean = false;
+    }
+    if (game_started) {
+        PlayerInfoList plList;
+        PlayerInfo* plI;
+        s_object* m_object;
+        UINT count = pIPlayer->m_get_str_to_player_list(L"*", &plList, nullptr);
+        UINT i = 0;
+        VARIANT argList[1];
+        for (i; i < 16; i++) {
+            human_time[i] = 0;
+        }
+        i = 0;
+        for (i; i < count; i++) {
+            plI = plList.plList + i;
+            m_object = pIObject->m_get_address(plI->plS->CurrentBiped);
+            if (m_object && plI->plR->Team == human_team)
+                AddScore(*plI, 1);
+
+            // do KOTH-specific stuff here:
+            if (gametype == GAMETYPE_KOTH) {
+                if (PlayerInHill(plList.plList[i]) && m_object) {
+                    if (inhill_time[plI->plR->MachineIndex] == 0) {
+                        m_object->noCollision = 1;
+                        VARIANTwstr(&argList[0], plI->plR->PlayerName);
+                        if (plI->plR->Team == human_team) {
+                            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, koth_infect_begin_message, 1, argList);
+                        } else {
+                            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, koth_kill_begin_message, 1, argList);
+                        }
+                    } else if (inhill_time[plI->plR->MachineIndex] >= 10) {
+                        if (plI->plR->Team == human_team) {
+                            makezombie(*plI, true);
+                            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, koth_infect_end_message, 1, argList);
+                        } else {
+                            pIObject->m_kill(plI->plS->CurrentBiped);
+                            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, koth_kill_end_message, 1, argList);
+                        }
+                        inhill_time[plI->plR->MachineIndex] = 0;
+
+                    } else if (plI->plR->Team == human_team) {
+                            VARIANTuint(&argList[0], 10 - inhill_time[plI->plR->MachineIndex]);
+                            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, plI, koth_kill_counter_message, 1, argList);
+                    }
+                } else if (m_object) {
+                    inhill_time[plI->plR->MachineIndex] = 0;
+                    m_object->noCollision = 0;
+                }
+            }
+
+            // Write scores for player.
+            if (gametype == GAMETYPE_KOTH) { // KOTH
+                plI->plS->FlagStealCount = human_time[plI->plR->MachineIndex] * 30;
+            } else if (gametype == GAMETYPE_CTF) { // CTF
+                plI->plS->FlagCaptureCount = human_time[plI->plR->MachineIndex];
+            } else if (gametype == GAMETYPE_SLAYER) { // Slayer
+                pIHaloEngine->gameTypeGlobals->slayerGlobal.playerScore2[plI->plR->PlayerIndex] = human_time[plI->plR->MachineIndex];
+            }
+        }
+    }
+    return true;
+}
+
+// RadWolfie - Approved
+bool invisCrouch() {
+    if (!zombies_invisible_on_crouch && !humans_invisible_on_crouch) {
+        return false;
+    }
+    PlayerInfoList plList;
+    PlayerInfo* plI;
+    s_biped* m_object;
+    UINT count = pIPlayer->m_get_str_to_player_list(L"*", &plList, nullptr);
+    for (UINT i = 0; i < count; i++) {
+        plI = plList.plList + i;
+        m_object = (s_biped*)pIObject->m_get_address(plI->plS->CurrentBiped);
+        if (m_object && m_object->actionVehicle_crouch_stand == 3) {
+            if ((plI->plR->Team == zombie_team && zombies_invisible_on_crouch) || (plI->plR->Team == human_team && humans_invisible_on_crouch)) {
+                pIPlayer->m_apply_camo(plI, time_invis);
+            }
+        }
+    }
+    return true;
+}
+
+//RadWolfie - Approved
+void MsgTimer(int index) {
+    PlayerInfo plI;
+
+    if (!(index >= 0 && index <= 15))
+        return;
+
+    if (pIPlayer->m_get_m_index(index, &plI, 1)) {
+        pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, welcome_message, 0, nullptr);
+        if (gametype == GAMETYPE_KOTH) { // KOTH
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, koth_additional_welcome_msg, 0, nullptr);
+        } else if (gametype == GAMETYPE_SLAYER) { // Slayer
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, slayer_additional_welcome1_msg, 0, nullptr);
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, slayer_additional_welcome2_msg, 0, nullptr);
+        }
+    }
+}
+
+//RadWolfie - Approved
+void NewGameTimer() {
+    if (pIHaloEngine->serverHeader->totalPlayers) {
+        UINT newgame_zombie_count = 0;
+
+        PlayerInfoList plList;
+        UINT count = pIPlayer->m_get_str_to_player_list(L"*", &plList, nullptr);
+
+        // by default make all players human
+        for (UINT i = 0; i < count; i++) {
+            makehuman(plList.plList[i], false);
+        }
+
+        // make players zombie until the count has been met
+        UINT finalZombies = 0;
+        if (cur_zombie_count > 0) {
+            finalZombies = cur_zombie_count;
+        } else { // zombie count is used as a percentage.
+            //TODO: RadWolfie - This... does not make sense at all.
+            finalZombies = (UINT)ceilf(reinterpret_cast<float&>(pIHaloEngine->serverHeader->totalPlayers) * reinterpret_cast<float&>(cur_zombie_count));
+        }
+
+        // make last human zombie
+        PlayerInfo last_human_index = PlayerInfo();
+
+        if (last_human_next_zombie && pIHaloEngine->serverHeader->totalPlayers > 1) {
+            for (UINT i = 0; i < count; i++) {
+                if (wcscmp(plList.plList[i].plR->PlayerName, last_human_name) == 0) {
+
+                    // make them a zombie and save their info
+                    makezombie(plList.plList[i], true);
+                    newgame_zombie_count = 1;
+                    last_human_index = plList.plList[i];
+                }
+            }
+        }
+
+        // reset last human
+        last_human_name[0] = 0;
+
+        if (finalZombies == pIHaloEngine->serverHeader->totalPlayers) { // if 0 players they will be human
+            finalZombies -= 1;
+        } else if (finalZombies > pIHaloEngine->serverHeader->totalPlayers) { // fix the count
+            finalZombies = pIHaloEngine->serverHeader->totalPlayers;
+        } else if (max_zombie_count && finalZombies > max_zombie_count) { // cap the zombie count
+            finalZombies = max_zombie_count;
+        } else if (finalZombies < 1) {
+            finalZombies = 1;
+        }
+
+        PlayerInfo newzomb;
+        // loop through the players, randomly selecting ones to become zombies
+        while (newgame_zombie_count < finalZombies) {
+
+            // randomly choose a player
+            newzomb = ChooseRandomPlayer(zombie_team);
+            if (!newzomb.mS) {
+                break;
+            } else if (newzomb.mS != last_human_index.mS) {
+                makezombie(newzomb, false);
+                newgame_zombie_count += 1;
+            }
+        }
+
+        // fix the team counters
+        cur_zombie_count = finalZombies;
+        cur_human_count = pIHaloEngine->serverHeader->totalPlayers - finalZombies;
+
+        // reset the map
+        pIHaloEngine->m_exec_command("sv_map_reset");
+        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, game_start_message, 0, nullptr);
+
+        // loop through and tell players which team they're on
+        for (UINT i = 0; i < count; i++) {
+            if (plList.plList[i].plR->Team == zombie_team) {
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plList.plList[i], zombie_message, 0, nullptr);
+            } else {
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plList.plList[i], human_message, 0, nullptr);
+            }
+        }
+    }
+    game_started = true;
+    resptime = 0;
+}
+
+//RadWolfie - Approved
+bool PlayerChangeTimer(UINT count) {
+    if (pIHaloEngine->serverHeader->totalPlayers == 0) {
+        noLoop:
+        hasPlayerChangeTimer = false;
+        return false;
+    }
+    if (count != 6 && team_play) {
+        UINT zombsize = cur_zombie_count;
+        if (allow_change == false || zombsize > 0) {
+            allow_change = false;
+            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, timer_team_change_msg, 0, nullptr);
+            goto noLoop;
+        }
+        VARIANT argList[1];
+        VARIANTuint(&argList[0], 6 - count);
+        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, nozombiesleft_counter_message, 1, argList);
+        return true;
+    } else { // timer up, force team change
+        allow_change = false;
+        PlayerInfo newZomb = ChooseRandomPlayer(zombie_team);
+        if (newZomb.mS) {
+            makezombie(newZomb, true);
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &newZomb, zombie_message, 0, nullptr);
+        } else {
+            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, L"PlayerChangeTimer got null", 0, nullptr);
+        }
+        goto noLoop;
+    }
+}
+
+#if 0
+//RadWolfie - Approved except does not save flag's ident.
+UINT PutUnderMapID = -1;
+void PutUnderMap(s_ident objectId) {
+    s_object* m_object = pIObject->m_get_address(objectId);
+    if (m_object) {
+        objManaged moveLoc = { {0, 0, 0} };
+        moveLoc.world = m_object->World;
+        moveLoc.world.z -= 20;
+        pIObject->m_move(objectId, moveLoc);
+    }
+}
+#endif
+
+//RadWolfie - Approved
+void RemoveLastHumanProtection() {
+    s_object* m_object = pIObject->m_get_address(lastman_object);
+    lastman_object = -1;
+    if (m_object) {
+        m_object->noCollision = 0;
+    }
+}
+
+#pragma region Timer Hook
+//RadWolfie - Approved
+CNATIVE dllAPI bool WINAPIC EXTOnTimerExecute(UINT id, UINT count) {
+    std::vector<dTimer>::iterator iTimerBegin = vTimer.begin();
+    bool reIterator = false;
+    reProcessTimer:
+    for (std::vector<dTimer>::iterator iTimer = vTimer.begin(); iTimer != vTimer.end(); iTimer++) {
+        if (iTimer->TimerID == id) {
+            if (reIterator) {
+                vTimer.erase(iTimer);
+                break;
+            }
+            //TODO: RadWolfie - This comment section is just to debug timer event onto visual studio's output window for verification.
+            /*VARIANT argList[4];
+            wchar_t msg[512];
+            VARIANTuint(&argList[0], id);
+            VARIANTuint(&argList[1], count);
+            VARIANTint(&argList[2], iTimer->machine_index);
+            VARIANTuint(&argList[3], iTimer->eFunc);
+            pIUtil->m_formatVariantW(msg, 512, L"id: {0:4d} | count: {1:4d} | mIndex: {2:4X} | eFunc: {3:2d}\n", 4, argList);
+            OutputDebugStringW(msg);*/
+            switch (iTimer->eFunc) {
+                case eNONE:
+                default:
+                    pIPlayer->m_send_custom_message_broadcast(MF_ALERT, L"Unknown timer trigger occurred. Please notify developer...", 0, nullptr);
+                    break;
+                case eAssignLeftOverZombieWeapon:
+                    AssignLeftoverZombieWeapons(iTimer->machine_index);
+                    break;
+                case eAssignLeftOverHumanWeapon:
+                    AssignLeftoverHumanWeapons(iTimer->machine_index);
+                    break;
+                case eAssignZombieWeapon:
+                    if (AssignZombieWeapons(iTimer->machine_index, count))
+                        return true;
+                    break;
+                case eAssignHumanWeapon:
+                    if (AssignHumanWeapons(iTimer->machine_index, count))
+                        return true;
+                    break;
+                case eHaveSpeedTimer:
+                    haveSpeedTimerFunc(iTimer->machine_index);
+                    break;
+                case eBumpTimer:
+                    bumpTimerFunc();
+                    return true;
+                    break;
+                case eBumpInfection:
+                    if (bumpInfection(iTimer->machine_index, count))
+                        return true;
+                    break;
+                case eCheckGameState:
+                    checkgamestate(iTimer->machine_index);
+                    break;
+                case eHumanTimer:
+                    if (HumanTimer())
+                        return true;
+                    break;
+                case eInvisCrouch:
+                    if (invisCrouch())
+                        return true;
+                    break;
+                case eMsgTimer:
+                    MsgTimer(iTimer->machine_index);
+                    break;
+                case eNewGameTimer:
+                    NewGameTimer();
+                    break;
+                case ePlayerChangeTimer:
+                    if (PlayerChangeTimer(count))
+                        return true;
+                    break;
+                case eRemoveLastManProtection:
+                    RemoveLastHumanProtection();
+                    break;
+            }
+            // RadWolfie - This is needed since it can perform a resize at any time without awareness.
+            if (iTimerBegin._Ptr != vTimer.begin()._Ptr) {
+                reIterator = true;
+                goto reProcessTimer;
+            }
+            // RadWolfie - This is just a precaution since checkgamestate called map_next (Triggered EXTOnEndGame hook) function which cleared all timers.
+            if (vTimer.size())
+                vTimer.erase(iTimer);
+            break;
+        }
+    }
+    return false;
+}
+
+//RadWolfie - Approved
+CNATIVE dllAPI void WINAPIC EXTOnTimerCancel(UINT id) {
+    for (std::vector<dTimer>::iterator iTimer = vTimer.begin(); iTimer != vTimer.end(); iTimer++) {
+        if (iTimer->TimerID == id) {
+            switch (iTimer->eFunc) {
+            case eNONE:
+            default:
+                pIPlayer->m_send_custom_message_broadcast(MF_ALERT, L"Unknown timer trigger occurred. Please notify developer...", 0, nullptr);
+                break;
+            case eAssignLeftOverZombieWeapon:
+                break;
+            case eAssignLeftOverHumanWeapon:
+                break;
+            case eAssignZombieWeapon:
+                break;
+            case eAssignHumanWeapon:
+                break;
+            case eHaveSpeedTimer:
+                break;
+            case eBumpTimer:
+                break;
+            case eBumpInfection:
+                infected[iTimer->machine_index] = 0;
+                break;
+            case eCheckGameState:
+                break;
+            case eHumanTimer:
+                break;
+            case eInvisCrouch:
+                break;
+            case eMsgTimer:
+                break;
+            case eNewGameTimer:
+                break;
+            case ePlayerChangeTimer:
+                hasPlayerChangeTimer = false;
+                break;
+            case eRemoveLastManProtection:
+                break;
+            }
+            vTimer.erase(iTimer);
+            break;
+        }
+    }
+}
+#pragma endregion
+
+#pragma endregion
+
+#pragma region Hooks section
+CNATIVE dllAPI void EXTOnMapLoad(s_ident mapTag, const wchar_t map[32]);
+
+//RadWolfie - Approved | except need to implement check if client is hosting or not and enable commands support.
+//TODO: Need to implement check if client is hosting or not and enable commands support.
+CNATIVE dllAPI EAO_RETURN WINAPIC EXTOnEAOLoad(UINT hash) {
+    EAOHashID = hash;
+    pIUtil = getIUtil(hash);
+    if (!pIUtil)
+        return EAO_FAIL;
+    pITimer = getITimer(hash);
+    if (!pITimer)
+        return EAO_FAIL;
+    pIObject = getIObject(hash);
+    if (!pIObject)
+        return EAO_FAIL;
+    pIPlayer = getIPlayer(hash);
+    if (!pIPlayer)
+        return EAO_FAIL;
+    pIHaloEngine = getIHaloEngine(hash);
+    if (!pIHaloEngine)
+        return EAO_FAIL;
+    pICommand = getICommand(hash);
+    if (!pICommand)
+        return EAO_FAIL;
+    customMsg = getICIniFile(hash);
+    if (!customMsg)
+        return EAO_FAIL;
+    if (pIHaloEngine->haloGameVersion == HV_TRIAL) //Does not support Halo Trial due to sv_map_reset is not featured in Trial version.
+        return EAO_FAIL;
+
+    srand((UINT)time(nullptr)); //NOTICE: THIS IS REQUIRED FOR RAND FUNCTION TO WORK!
+    pl_null = PlayerInfo();
+    hasPlayerChangeTimer = false;
+
+    pICommand->m_reload_level(hash);
+    if (!CALL_MEMBER_FN(customMsg, m_open_file, customMsgStr)) {
+        if (CALL_MEMBER_FN(customMsg, m_create_file, customMsgStr))
+            if (CALL_MEMBER_FN(customMsg, m_open_file, customMsgStr))
+                goto successInitCustomMsg;
+        CALL_MEMBER_FN(customMsg, m_release);
+        return EAO_FAIL;
+    }
+successInitCustomMsg:
+#pragma region Custom Message support
+    CALL_MEMBER_FN(customMsg, m_load);
+
+    //Hint Messages
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_0, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_0, blockteamchange_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_0, blockteamchange_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_1, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_1, teamkill_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_1, teamkill_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_2, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_2, nozombiesleftmessage, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_2, nozombiesleftmessage, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_3, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_3, lastman_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_3, lastman_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_4, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_4, rejoin_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_4, rejoin_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_5, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_5, zombieinvis_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_5, zombieinvis_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_6, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_6, speedburst_begin_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_6, speedburst_begin_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_7, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_7, speedburst_end_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_7, speedburst_end_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_8, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_8, block_tree_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_8, block_tree_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_9, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_9, block_spot_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_9, block_spot_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_10, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_10, block_glitch_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_10, block_glitch_message, section_str_hint);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_11, section_str_hint)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_11, nozombiesleft_counter_message, section_str_hint);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_11, nozombiesleft_counter_message, section_str_hint);
+    }
+
+
+
+    // Death/Infection Messages
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_0, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_0, falling_infected_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_0, falling_infected_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_1, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_1, guardian_infected_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_1, guardian_infected_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_2, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_2, kill_infected_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_2, kill_infected_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_3, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_3, teammate_infected_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_3, teammate_infected_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_4, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_4, suicide_infected_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_4, suicide_infected_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_5, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_5, human_kill_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_5, human_kill_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_6, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_6, falling_death_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_6, falling_death_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_7, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_7, guardian_death_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_7, guardian_death_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_8, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_8, teammate_death_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_8, teammate_death_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_9, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_9, suicide_death_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_9, suicide_death_message, section_str_death);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_10, section_str_death)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_10, infected_message, section_str_death);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_10, infected_message, section_str_death);
+    }
+
+    // Complement Messages
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_0, section_str_complement)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_0, timer_team_change_msg, section_str_complement);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_0, timer_team_change_msg, section_str_complement);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_1, section_str_complement)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_1, zombie_backtap_message, section_str_complement);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_1, zombie_backtap_message, section_str_complement);
+    }
+
+    // New Team Messages
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_0, section_str_new_team)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_0, human_message, section_str_new_team);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_0, human_message, section_str_new_team);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_1, section_str_new_team)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_1, zombie_message, section_str_new_team);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_1, zombie_message, section_str_new_team);
+    }
+
+    // Additional Messages
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_0, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_0, welcome_message, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_0, welcome_message, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_1, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_1, koth_additional_welcome_msg, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_1, koth_additional_welcome_msg, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_2, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_2, slayer_additional_welcome1_msg, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_2, slayer_additional_welcome1_msg, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_3, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_3, slayer_additional_welcome2_msg, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_3, slayer_additional_welcome2_msg, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_4, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_4, cure_zombie_kill_message, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_4, cure_zombie_kill_message, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_5, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_5, game_start_message, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_5, game_start_message, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_6, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_6, zombie_infect_human_message, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_6, zombie_infect_human_message, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_7, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_7, human_infect_begin_message, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_7, human_infect_begin_message, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_8, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_8, human_infect_counter_message, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_8, human_infect_counter_message, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_9, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_9, human_infect_end_message, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_9, human_infect_end_message, section_str_misc);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_10, section_str_misc)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_10, cure_human_message, section_str_misc);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_10, cure_human_message, section_str_misc);
+    }
+
+    // Gametype Messages
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_0, section_str_gametype)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_0, koth_infect_begin_message, section_str_gametype);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_0, koth_infect_begin_message, section_str_gametype);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_1, section_str_gametype)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_1, koth_infect_end_message, section_str_gametype);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_1, koth_infect_end_message, section_str_gametype);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_2, section_str_gametype)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_2, koth_kill_begin_message, section_str_gametype);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_2, koth_kill_begin_message, section_str_gametype);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_3, section_str_gametype)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_3, koth_kill_end_message, section_str_gametype);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_3, koth_kill_end_message, section_str_gametype);
+    }
+    if (CALL_MEMBER_FN(customMsg, m_key_exist, str1_4, section_str_gametype)) {
+        CALL_MEMBER_FN(customMsg, m_value_get, str1_4, koth_kill_counter_message, section_str_gametype);
+    } else {
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_4, koth_kill_counter_message, section_str_gametype);
+    }
+
+    /*TODO: Commands are currently disabled for now.
+    //General section, 1.x = Variety messages for the commands section
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_0, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_0, L"disable", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_1, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_1, L"enable", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_2, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_2, L"Infection gametype", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_3, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_3, L"red team", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_4, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_4, L"blue team", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_5, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_5, L"Zombie", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_6, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_6, L"Human", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_7, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_7, L"Last man", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_8, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_8, L"forbidden", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_9, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_9, L"permitted", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_10, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_10, L"Infect by fall", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_11, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_11, L"Infect by guardian", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_12, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_12, L"Infect by suicide", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_13, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_13, L"Infect by betrayal", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_14, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str1_14, L"Invisible zombie crouching", section_str_general);
+
+    //if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_, section_str_general))
+    //CALL_MEMBER_FN(customMsg, m_value_set, str1_, , section_str_general);
+
+    //Commands section, 2.x = Variety messages combo
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_0, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_0, L"{0:s} is currently {1:s}.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_1, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_1, L"{0:s} is now set to {1:s}.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_2, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_2, L"{0:s} is already {1:s}.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_3, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_3, L"{0:s} is currently on {1:s}.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_4, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_4, L"{0:s} is already on {1:s}.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_5, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_5, L"{0:s} is currently at {1:d} second(s).", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_6, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_6, L"{0:s} is now set to {1:d} second(s).", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_7, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_7, L"{0:s} is already set to {1:d} second(s).", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_8, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_8, L"{0:s} is currently at x{1:f} speed.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_9, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_9, L"{0:s} is now set to x{1:f} speed.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_10, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_10, L"{0:s} is already set to x{1:f} speed.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_11, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_11, L"{0:s} team are currently {1:s} to enter the vehicle.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_12, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_12, L"{0:s} team are set {1:s} to enter the vehicle.", section_str_general);
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_13, section_str_general))
+        CALL_MEMBER_FN(customMsg, m_value_set, str2_13, L"{0:s} team are already set {1:s} to enter the vehicle.", section_str_general);
+    */
+    /*if (!CALL_MEMBER_FN(customMsg, m_key_exist, str2_, section_str_general))
+    CALL_MEMBER_FN(customMsg, m_value_set, str2_, , section_str_general);*/
+    /*if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_, ))
+    CALL_MEMBER_FN(customMsg, m_value_set, str1_, , );
+    if (!CALL_MEMBER_FN(customMsg, m_key_exist, str1_, ))
+    CALL_MEMBER_FN(customMsg, m_value_set, str1_, , );*/
+    CALL_MEMBER_FN(customMsg, m_save);
+    CALL_MEMBER_FN(customMsg, m_close);
+#pragma endregion
+
+    /*TODO: Commands are currently disabled for now.
+    pICommand->m_add(EAOHashID, eao_infection_enable_str, eaoGametypeInfectionEnable, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_zombie_team_str, eaoGametypeInfectionZombieTeam, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_zombie_respawn_str, eaoGametypeInfectionZombieRespawn, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_human_respawn_str, eaoGametypeInfectionHumanRespawn, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_zombie_speed_str, eaoGametypeInfectionZombieSpeed, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_human_speed_str, eaoGametypeInfectionHumanSpeed, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_last_man_speed_str, eaoGametypeInfectionLastManSpeed, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_last_man_next_zombie_str, eaoGametypeInfectionLastManNextZombie, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_zombie_allow_in_vehicle_str, eaoGametypeInfectionZombieAllowInVehicle, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_human_allow_in_vehicle_str, eaoGametypeInfectionHumanAllowInVehicle, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_infect_on_fall_str, eaoGametypeInfectionInfectOnFall, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_infect_on_guardians_str, eaoGametypeInfectionInfectOnGuardians, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_infect_on_suicide_str, eaoGametypeInfectionInfectOnSuicide, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_infect_on_betrayal_str, eaoGametypeInfectionInfectOnBetrayal, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    pICommand->m_add(EAOHashID, eao_infection_zombie_invisible_on_crouch_str, eaoGametypeInfectionZombieInvisibleOnCrouch, EXTPluginInfo.sectors.sect_name1, 1, 2, false, modeAll);
+    */
+
+    //Wizard's code
+    if ((*pIHaloEngine->mapStatus)->upTime >= 30 && pIHaloEngine->mapCurrent->type == 1) { //TODO: pIHaloEngine->mapCurrent->type is a temporary solution atm.
+        wchar_t map_name[32] = { 0 };
+        pIUtil->m_toCharW(pIHaloEngine->mapCurrent->name, 32, map_name);
+        EXTOnMapLoad(0, map_name);
+    } else {
+        game_started = false;
+    }
+    pIPlayer->m_send_custom_message(MF_INFO, MP_RCON, nullptr, L"Infection GameType support added.", 0, nullptr);
+    return EAO_CONTINUE;
+}
+
+//RadWolfie - Approved | except need to implement correct uninitialize method since it can be unload in middle of gameplay.
+//TODO: Need to implement correct uninitialize method since it can be unload in middle of gameplay.
+CNATIVE dllAPI void WINAPIC EXTOnEAOUnload() {
+    //Uninit();
+    unsetZombieWeaponAttributes();
+    CALL_MEMBER_FN(customMsg, m_release);
+
+    /*TODO: Commands are currently disabled for now.
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionEnable, eao_infection_enable_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionZombieTeam, eao_infection_zombie_team_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionZombieRespawn, eao_infection_zombie_respawn_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionHumanRespawn, eao_infection_human_respawn_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionZombieSpeed, eao_infection_zombie_speed_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionHumanSpeed, eao_infection_human_speed_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionLastManSpeed, eao_infection_last_man_speed_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionLastManNextZombie, eao_infection_last_man_next_zombie_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionZombieAllowInVehicle, eao_infection_zombie_allow_in_vehicle_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionHumanAllowInVehicle, eao_infection_human_allow_in_vehicle_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionInfectOnFall, eao_infection_infect_on_fall_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionInfectOnGuardians, eao_infection_infect_on_guardians_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionInfectOnSuicide, eao_infection_infect_on_suicide_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionInfectOnBetrayal, eao_infection_infect_on_betrayal_str);
+    pICommand->m_delete(EAOHashID, eaoGametypeInfectionZombieInvisibleOnCrouch, eao_infection_zombie_invisible_on_crouch_str);
+    */
+
+    pIPlayer->m_send_custom_message(MF_INFO, MP_RCON, nullptr, L"Infection GameType support removed.", 0, nullptr);
+}
+
+//RadWolfie - Approved | except need check if running a game or not.
+//TODO: Need implement support to check if client is hosting PLUS is not idling.
+CNATIVE dllAPI void EXTOnMapLoad(s_ident mapTag, const wchar_t map[32]) {
+        InitializeGame();
+        LoadTags();
+        setZombieWeaponAttributes();
+        for (UINT i = 0; i < 4; i++) {
+            hTagHeader* weaponTag =  pIObject->m_lookup_tag_type_name(TAG_WEAP, human_weapon[i]);
+            if (weaponTag)
+                hweapon[i] = weaponTag->ident;
+            else
+                hweapon[i] = -1;
+        }
+
+        // reset our variables
+        cur_zombie_count = 0;
+        cur_human_count = 0;
+        //cur_players = 0; //TODO: Not required
+        resptime = 5;
+        //Map = map
+        //name_table = {}
+
+        // the game hasn't started yet, will once timer runs down
+        game_started = false;
+        UINT id = pITimer->m_add(EAOHashID, nullptr, 225); // 7.5 seconds
+        if (id)
+            vTimer.push_back({ id, eNewGameTimer, -1 });
+
+        if (wcscmp(map, L"putput") == 0 || wcscmp(map, L"longest") == 0 || wcscmp(map, L"beavercreek") == 0 || wcscmp(map, L"carousel") == 0 || wcscmp(map, L"wizard") == 0) {
+            zombie_speed = 1.5f;
+            lastman_speed = 1.25f;
+        }
+}
+
+//RadWolfie - Approved
+CNATIVE dllAPI void WINAPIC EXTOnEndGame(int stage) {
+    game_started = false;
+    if (stage == 1) { //For safety purpose.
+        for (std::vector<dTimer>::iterator iTimer = vTimer.begin(); iTimer != vTimer.end(); iTimer++) {
+            pITimer->m_delete(EAOHashID, iTimer->TimerID);
+        }
+        vTimer.clear();
+    }
+}
+
+//RadWolfie - Approved | Except need implement full support for rejoiner player.
+CNATIVE dllAPI void WINAPIC EXTOnPlayerJoin(PlayerInfo plI) {
+    // update the player counts
+    //cur_players += 1; //TODO: Not required.
+    if (plI.plR->Team == zombie_team) {
+        cur_zombie_count += 1;
+    } else {
+        cur_human_count += 1;
+    }
+
+    // onteamdecision isn't called for ffa gametypes
+    // Not require
+
+    alpha_zombie_count = getalphacount();
+    //UINT thisTeamSize = pIPlayer->m_get_str_to_player_list(plI.plR->Team == COLOR_TEAM_BLUE ? teamBlueStr : teamRedStr, nullptr, nullptr);
+    bool alreadyExists = false;
+
+    // check if the player has joined this game previously
+    // Do nothing if we're on the last human stage.
+    if (!cur_last_human.plEx) {
+        // check if the player has joined this game previously
+        // Do nothing if we're on the last human stage.
+        //TODO: Need implement support (relative to name_table)
+        /*for k, v in pairs(name_table) do
+        if name == k then
+        if thisTeamSize >= 1 then
+        privatesay(playerId, rejoin_message)
+        team = v
+        end
+        alreadyExists = true
+        break
+        end
+        end*/
+    }
+    // add team entry for this name
+    // Always false if we're on the last human stage.
+    if (!alreadyExists) {
+        //name_table[name] = team
+    }
+    // make sure the game is started
+    if (game_started) {
+        // check if the player is a zombie
+        // OR if the game is at last_human(We dont want anyone joining as humans during the last human stage.)
+        if (plI.plR->Team == zombie_team || cur_last_human.plEx) {
+            // make the player a zombie (or at least set their traits)
+            makezombie(plI, false);
+
+            // send them a zombie message
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, zombie_message, 0, nullptr);
+        } else {
+            // make the player a human (or at least set their traits)
+            makehuman(plI, false);
+
+            // send them a human message
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, human_message, 0, nullptr);
+        }
+
+        // send the player the welcome message
+        pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, welcome_message, 0, nullptr);
+        if (gametype == GAMETYPE_KOTH) {
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_CHAT, &plI, koth_additional_welcome_msg, 0, nullptr);
+        } else if (gametype == GAMETYPE_SLAYER && gametype_indicator==1) {
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_CHAT, &plI, slayer_additional_welcome1_msg, 0, nullptr);
+        }
+        UINT id = pITimer->m_add(EAOHashID, &plI, 7); // 200 milliseconds
+        if (id)
+            vTimer.push_back({ id, eCheckGameState, -1 });
+    } else {
+        UINT id = pITimer->m_add(EAOHashID, &plI, 300); // 10 seconds
+        if (id)
+            vTimer.push_back({ id, eMsgTimer, plI.plR->MachineIndex });
+    }
+}
+
+//RadWolfie - Approved
+CNATIVE dllAPI void WINAPIC EXTOnPlayerQuit(PlayerInfo plI) {
+    if (game_started) {
+        // check if they're a zombie
+        if (plI.plR->Team == zombie_team) {
+            // take one away from the current zombie count
+            cur_zombie_count -= 1;
+        } else {
+            // take one away from the current human count
+            cur_human_count -= 1;
+        }
+    }
+    // if last human is leaving, reset it
+    if (plI.mS == cur_last_human.mS) {
+        cur_last_human = PlayerInfo();
+    }
+
+    // minus one from current players
+    //cur_players -= 1; //TODO: Not required
+
+    // check the current game state (the player that left might have been the last human or the only zombie)
+    UINT id = pITimer->m_add(EAOHashID, nullptr, 30); // 1 second
+    if (id)
+        vTimer.push_back({ id, eCheckGameState, -1 });
+
+    // update team within table
+    //TODO: update team within table
+    //name_table[name] = team
+}
+
+//RadWolfie - Approved
+CNATIVE dllAPI void WINAPIC EXTOnPlayerSpawn(PlayerInfo plI, s_ident ident, s_biped* pl_biped) {
+
+    // get the player's team (Not needed)
+    //local team = getteam(playerId)
+    usedFlashlight[plI.plR->MachineIndex] = false;
+    UINT id;
+
+    if (plI.plR->Team == zombie_team) {
+
+        // set nade counts
+        pl_biped->grenade0 = zombie_frag_count;
+        pl_biped->grenade1 = zombie_plasma_count;
+
+        // set shields to nothing
+        pl_biped->sObject.Shield1 = 0.0f;  // Shields to 0.
+        pl_biped->sObject.ShieldMax = 0.0f; // Max shields to 0.
+
+        // set health to 2x
+        pl_biped->sObject.Health *= 2;
+
+        // initiate ammo variables
+        unsigned short clipcount = alphazombie_clip_count;
+        unsigned short ammocount = alphazombie_ammo_count;
+        float batterycount = alphazombie_battery_count;
+
+        // initiate ammo variables
+        if (cur_zombie_count > reinterpret_cast<int&>(alpha_zombie_count)) {
+            clipcount = zombie_clip_count;
+            ammocount = zombie_ammo_count;
+            batterycount = zombie_battery_count;
+        } else { // set alpha nades
+            pl_biped->grenade0 = alphazombie_frag_count;
+            pl_biped->grenade1 = alphazombie_plasma_count;
+        }
+        // check if the starting equipment is generic
+        if (starting_equipment_is_generic) {
+            int i = 0;
+            while (i < 4) { // loop through the player's weapons (primary through quartenary)
+
+                // get the player's weapon
+                s_weapon* m_weapon = (s_weapon*)pIObject->m_get_address(pl_biped->Weapons[i]);
+
+                // make sure a weapon exists
+                if (m_weapon) {
+
+                    // set the ammo
+                    m_weapon->BulletCountInRemainingClips = ammocount;
+                    m_weapon->BulletCountInCurrentClip = clipcount;
+
+                    // set the battery (math.abs is absolute value meaning it takes the opposite of battery count (meaning 0 needs to be 1 and 1 needs to be 0))
+                    m_weapon->ammoBattery = abs(batterycount - 1.0f);
+
+                    // force it to sync
+                    pIObject->m_update(pl_biped->Weapons[i]);
+                }
+                i++;
+            }
+            if (plI.plR->Team == zombie_team) {
+                // check if we still need to assign leftover weapons to zombies (tertiary and quartenary weapons)
+                if (zweapon[3].Tag) { // make sure the script user isn't retarded
+                    // assign the leftover weapons to the player
+                    AssignLeftoverZombieWeaponsData[plI.plR->MachineIndex] = {
+                        clipcount,
+                        ammocount,
+                        batterycount };
+                    id = pITimer->m_add(EAOHashID, &plI, 0);
+                    if (id)
+                        vTimer.push_back({ id, eAssignLeftOverZombieWeapon, plI.plR->MachineIndex });
+                }
+            } else {
+                // check if we still need to assign leftover weapons to humans (tertiary and quartenary weapons)
+                if (hweapon[3].Tag) { // make sure the script user isn't retarded
+                    // assign the leftover weapons to the player
+                    AssignLeftoverHumanWeaponsData[plI.plR->MachineIndex] = {
+                        clipcount,
+                        ammocount,
+                        batterycount };
+                    id = pITimer->m_add(EAOHashID, &plI, 0);
+                    if (id)
+                        vTimer.push_back({ id, eAssignLeftOverHumanWeapon, plI.plR->MachineIndex });
+                }
+            }
+        } else {
+            // assign the correct weapons to the player
+            if (plI.plR->Team == zombie_team) {
+                AssignZombieWeaponsData[plI.plR->MachineIndex] = {
+                    clipcount,
+                    ammocount,
+                    batterycount };
+
+                id = pITimer->m_add(EAOHashID, &plI, 0);
+                if (id)
+                    vTimer.push_back({ id, eAssignZombieWeapon, plI.plR->MachineIndex });
+            } else {
+
+                AssignHumanWeaponsData[plI.plR->MachineIndex] = {
+                    clipcount,
+                    ammocount,
+                    batterycount };
+
+                id = pITimer->m_add(EAOHashID, &plI, 0);
+                if (id)
+                    vTimer.push_back({ id, eAssignHumanWeapon, plI.plR->MachineIndex });
+            }
+        }
+    }
+
+    // check if the gametype is slayer
+    if (gametype == GAMETYPE_SLAYER) {
+        if (cur_last_human.mS) { // write the navpoint to the current last human
+            plI.plS->killInOrderObjective.index = cur_last_human.plR->PlayerIndex;
+            plI.plS->killInOrderObjective.salt = cur_last_human.plS->PlayerID;
+        } else { // there is no last human so put a nav above this player's head
+            //TODO: killInOrderObjective set to -1 method does not show it is working for both PC & CE...Wizard said it is working in PC.
+            //plI.plS->killInOrderObjective.Tag = -1;
+            plI.plS->killInOrderObjective.index = plI.plR->PlayerIndex; //Alternate workaround for now.
+            plI.plS->killInOrderObjective.salt = plI.plS->PlayerID;
+        }
+    }
+}
+
+//RadWolfie - Does not exist
+//TODO: RadWolfie - OnPlayerSpawnEnd does not exist to port in H-Ext... And I think it is require for better management.
+//PS. It is only for last human given infinite ammo.
+// EXTOnPlayerSpawnEnd (N/A)
+
+//RadWolfie - Approved | except it can be improvise with EXTOnWeaponAssignmentCustom include support
+CNATIVE dllAPI void WINAPIC EXTOnWeaponAssignmentDefault(PlayerInfo plI, s_ident ownerObjId, s_tag_reference* cur_weap_id, unsigned int order, s_ident* new_weap_id) {
+    if (plI.plR->Team == zombie_team) {
+        if (order == 0 && zweapon[0].Tag) {
+            *new_weap_id = zweapon[0].Tag;
+        } else if (order == 1 && zweapon[1].Tag) {
+            *new_weap_id = zweapon[1].Tag;
+        }
+    }
+}
+
+#if 0
+//RadWolfie - Approved except does not save the ident of the flag.
+CNATIVE dllAPI bool WINAPIC EXTOnObjectCreationAttempt(PlayerInfo plOwner, objCreationInfo object_creation, objCreationInfo* change_object, bool isOverride) {
+    if (gametype == GAMETYPE_CTF && object_creation.map_id.Tag == flag_tag_id->ident.Tag) {
+        PutUnderMapID = pITimer->m_add(EAOHashID, nullptr, 0);
+    }
+}
+#endif
+
+//RadWolfie - Approved
+CNATIVE dllAPI bool WINAPIC EXTOnObjectInteraction(PlayerInfo plI, s_ident obj_id, s_object* m_object, hTagHeader* tagId) {
+    // Allow any object interaction by default.
+    bool response = true;
+
+    // Make sure the game is started before we do anything.
+    if (!game_started) {
+        return true;
+    }
+
+    // We don't want ANYONE picking up oddballs or flags.
+    if (tagId == oddball_tag_id || tagId == flag_tag_id) {
+        return false;
+    }
+
+    // Check if player is on the zombie team.
+    if (plI.plR->Team == zombie_team) {
+
+        // Set default return value to false, because we don't want them picking up any weapons
+        // other than the ones listed here.
+        response = false;
+
+        // Check if the player is trying to pick up a camo.
+        if (tagId == camouflage_tag_id) {
+
+            // Check if the player is invisible (otherwise this will spam)
+            s_biped* pl_biped = (s_biped*)pIObject->m_get_address(plI.plS->CurrentBiped);
+            if (pl_biped->isInvisible != 0x51) {
+
+                // 50% chance of making the entire zombie team invisible.
+                int doInvis = randomRange(1, 10);
+                if (doInvis > 5) {
+                    // Make entire zombie team invisible for 30 seconds.
+                    PlayerInfoList plList;
+                    int count = pIPlayer->m_get_str_to_player_list(zombie_team == COLOR_TEAM_BLUE ? teamBlueStr : teamRedStr, &plList, nullptr);
+                    for (int i = 0; i < count; i++) {
+                        pIPlayer->m_apply_camo(&plList.plList[i], 30);
+                    }
+                    pIPlayer->m_send_custom_message_broadcast(MF_BLANK, zombieinvis_message, 0, nullptr);
+
+                    //RadWolfie - Bugfixes
+                    pIObject->m_destroy(obj_id);
+                } else {
+                    response = true;
+                }
+                    //RadWolfie - Bugfigxes end
+            }
+            // We want to allow zombies to pick up overshields and health packs.
+        } else if (tagId == overshield_tag_id || tagId == healthpack_tag_id) {
+            response = true;
+        }
+        // I was too lazy to implement onweaponpickup, this will do just fine though.
+    } else if (cur_last_human.mS == plI.mS) {
+        if (m_object->objType == 2) { // check if this is a weapon
+            // if so, give it infinite ammo
+            ((s_weapon*)m_object)->BulletCountInRemainingClips = 0x7FFF; // lasthuman ammocount
+            ((s_weapon*)m_object)->BulletCountInCurrentClip = 0x7FFF; // lasthuman clipcount
+        }
+        // Player is infected and trying to pick up a health pack to cure them.
+    } else if (plI.plR->Team == human_team && tagId == healthpack_tag_id) {
+        if (infected[plI.plR->MachineIndex]) {
+            for (std::vector<dTimer>::iterator iTimer = vTimer.begin(); iTimer != vTimer.end(); iTimer++) {
+                if (iTimer->eFunc == eBumpInfection && iTimer->machine_index == plI.plR->MachineIndex) {
+                    pITimer->m_delete(EAOHashID, iTimer->TimerID);
+                    vTimer.erase(iTimer);
+                    break;
+                }
+            }
+            infected[plI.plR->MachineIndex] = 0;
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, cure_human_message, 0, nullptr);
+        }
+    }
+    return response;
+}
+
+//RadWolfie - Approved
+CNATIVE dllAPI void WINAPIC EXTOnPlayerDeath(PlayerInfo killer, PlayerInfo victim, int mode, bool* showMessage) {
+    // This variable determines if the kill message is sent, or blocked.
+    // We're setting it to the default (nil) which sets to Phasor's default (true)
+    bool response = true;
+
+    // This will be 'true' if this function infects a player.
+    bool infecting = true;
+
+    // Can't have bump infection if player is already dead.
+    infected[victim.plR->MachineIndex] = 0;
+
+    // Make sure the game is started before we do anything.
+    if (game_started) {
+
+        if (resptime) {
+            victim.plS->RespawnTimer = resptime * 33;
+        } else if (human_spawn_time && victim.plR->Team == human_team) {
+            victim.plS->RespawnTimer = human_spawn_time * 33;
+        } else if (zombie_spawn_time && victim.plR->Team == zombie_team) {
+            victim.plS->RespawnTimer = zombie_spawn_time * 33;
+        }
+        VARIANT argList[2];
+
+        switch (mode) {
+            //case 0: //server kill
+            //case 3: //killed by vehicle
+            default:
+                break;
+            case 1: {
+                // Apparently people 'fall' to their death when the map resets.
+                if (map_reset_boolean)
+                    break;
+                // If this is true then a person who dies from falling will be infected
+                if (infect_on_fall) {
+
+                    // We need to check the victim's team to see if we
+                    // need to make them a zombie (if they're human)
+                    if (victim.plR->Team == human_team) {
+                        infecting = true;
+                        if (falling_infected_message[0]) {
+                            response = false;
+                            VARIANTwstr(&argList[0], victim.plS->Name);
+                            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, falling_infected_message, 1, argList);
+                        }
+                        makezombie(victim, false);
+                    }
+                }
+
+                // Check if a kill message has been serversaid.
+                // If not, let's serversay one.
+                if (response) {
+                    if (falling_death_message[0]) {
+                        response = false;
+                        VARIANTwstr(&argList[0], victim.plS->Name);
+                        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, falling_death_message, 1, argList);
+                    }
+                }
+                break;
+            }
+            case 2: { // killed by guardians
+
+                // If this is true then a person who dies from the guardians will be infected
+                if (infect_on_guardians) {
+
+                    // We need to check the victim's team to see if we
+                    // need to make them a zombie (if they're human)
+                    if (victim.plR->Team == human_team) {
+                        infecting = true;
+                        if (guardian_infected_message[0]) {
+                            response = false;
+                            VARIANTwstr(&argList[0], victim.plS->Name);
+                            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, guardian_infected_message, 1, argList);
+                        }
+                        makezombie(victim, false);
+                    }
+                }
+
+                // Check if a kill message has been serversaid.
+                // If not, let's serversay one.
+                if (response) {
+                    if (guardian_death_message[0]) {
+                        response = false;
+                        VARIANTwstr(&argList[0], victim.plS->Name);
+                        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, guardian_death_message, 1, argList);
+                    }
+                }
+                break;
+            }
+            case 4:
+            case 5: { // killed by another player
+
+                // Check if zombie is killing a human.
+                // EVENT: Zombie infecting a human.
+                if (killer.plR->Team == zombie_team && victim.plR->Team == human_team) {
+                    infecting = true;
+                    if (kill_infected_message[0]) {
+                        response = false;
+                        VARIANTwstr(&argList[0], killer.plS->Name);
+                        VARIANTwstr(&argList[1], victim.plS->Name);
+                        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, kill_infected_message, 2, argList);
+                    }
+                    makezombie(victim, false);
+
+                    // Add 30 to the zombie's score to reward their infection of a human.
+                    AddScore(killer, 30);
+
+                    // Check if the zombie has gotten enough kills to become a human again.
+                    zombie_kills[killer.plR->MachineIndex] += 1;
+                    if (zombie_kills[killer.plR->MachineIndex] >= 5) {
+                        VARIANTwstr(&argList[0], killer.plS->Name);
+                        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, cure_zombie_kill_message, 1, argList);
+                        zombie_kills[killer.plR->MachineIndex] = 0;
+                        makehuman(killer, true);
+
+                        // send killer a human message.
+                        pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &killer, human_message, 0, nullptr);
+                    }
+                // FFA CHECK: Make sure human isn't trying to kill another human.
+                // EVENT: Betrayal.
+                } else if (killer.plR->Team == victim.plR->Team) {
+                    if (infect_on_betrayal) {
+
+                        // We don't care about betrayals on the zombie team.
+                        if (killer.plR->Team == human_team) {
+
+                            // Infect this jerk for betraying a teammate.
+                            infecting = true;
+                            if (teammate_infected_message[0]) {
+                                response = false;
+                                VARIANTwstr(&argList[0], killer.plS->Name);
+                                VARIANTwstr(&argList[1], victim.plS->Name);
+                                pIPlayer->m_send_custom_message_broadcast(MF_BLANK, teammate_infected_message, 2, argList);
+                            }
+                            makezombie(killer, true);
+                        }
+                    }
+
+                    // Check if a betrayal message has been serversaid.
+                    // If not, let's serversay one.
+                    if (response) {
+                        if (teammate_death_message[0]) {
+                            response = false;
+                            VARIANTwstr(&argList[0], killer.plS->Name);
+                            VARIANTwstr(&argList[1], victim.plS->Name);
+                            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, teammate_death_message, 2, argList);
+                        }
+                    }
+                // BEWARE: This WILL pass in FFA if human is killing another human.
+                // EVENT: A non-zombie is killing someone.
+                } else if (killer.plR->Team == human_team) {
+                    if (human_kill_message[0]) {
+                        response = false;
+                        VARIANTwstr(&argList[0], killer.plS->Name);
+                        VARIANTwstr(&argList[1], victim.plS->Name);
+                        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, human_kill_message, 2, argList);
+                    }
+
+                    // Add 5 to the human's score to reward their kill.
+                    AddScore(killer, 5);
+
+                    spawnAmmoForKiller(killer, victim);
+                }
+                break;
+            }
+            case 6: { // suicide
+
+                      // If this is true then a person who dies from committing suicide will be infected
+                if (infect_on_suicide) {
+
+                    // We need to check the victim's team to see if we
+                    // need to make them a zombie (if they're human)
+                    if (victim.plR->Team == human_team) {
+                        infecting = true;
+                        if (suicide_infected_message[0]) {
+                            response = false;
+                            VARIANTwstr(&argList[0], victim.plS->Name);
+                            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, suicide_infected_message, 1, argList);
+                        }
+                        makezombie(victim, false);
+                    }
+                }
+
+                // Check if a kill message has been serversaid.
+                // If not, let's serversay one.
+                if (response) {
+                    if (suicide_death_message[0]) {
+                        response = false;
+                        VARIANTwstr(&argList[0], victim.plS->Name);
+                        pIPlayer->m_send_custom_message_broadcast(MF_BLANK, suicide_death_message, 1, argList);
+                    }
                 }
                 break;
             }
         }
-    }
-    if (cur_last_man.mS) {
-        wchar_t msg[256];
-        customMsg->ValueGet(str1_3, msg, section_str_misc);
-        pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*lastman_message.c_str()*/, cur_last_man.plS->Name, lastman_invistime);
-        pIPlayer->applyCamo(cur_last_man, lastman_invistime);
+        if (victim.plR->Team == zombie_team) {
+
+            // don't let the zombie drop weapons on death:
+            destroyweapons(victim);
+        }
+        UINT id = pITimer->m_add(EAOHashID, &victim, 6); // 200 milliseconds - checkgamestate for victim
+        if (id)
+            vTimer.push_back({ id, eCheckGameState, victim.plR->MachineIndex });
+
+        // Use normal infection messages from old zombies, if no replacement message is used.
+        if (infecting && response) {
+            //CALL_MEMBER_FN(customMsg, m_value_get, str?_?, msg, section_str_death);
+            //if (msg[0]) {
+            response = false;
+            VARIANTwstr(&argList[0], victim.plS->Name);
+            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, infected_message, 1, argList);
+            //}
+        }
+        *showMessage = response;
     }
 }
-void checkgamestate(IPlayer::PlayerInfo player) {
-    // check if the game has started yet
-    if (game_init > 1) {
-        //local human_count, zombie_count = getteamsizes()
-        // if no humans, but there are zombies, end the game
-        if (cur_human_count == 0 && cur_zombie_count > 0) {
-            all_players_zombies(player);
-        } else if (cur_human_count > 1 && cur_zombie_count == 0) {
-            noZombiesLeft();
-        } else if (cur_human_count == 1 && cur_zombie_count > 0 && !cur_last_man.mS) {
-            onlastman();
-        } else if (cur_last_man.mS && zombie_count == 0) {
-            if (cur_last_man.mS) {
-                makehuman(cur_last_man, false);
-            }
-            cur_last_man = IPlayer::PlayerInfo();
-        } else if (cur_last_man.mS && cur_human_count > 1) {
-            if (pIHaloEngine->gameTypeLive->GameStage==GAMETYPE_SLAYER)
-                takenavsaway();
-            if (cur_last_man.mS)
-                makehuman(cur_last_man, false);
-            cur_last_man = IPlayer::PlayerInfo();
+
+//RadWolfie - Approved
+CNATIVE dllAPI e_color_team_index WINAPIC EXTOnPlayerJoinDefault(s_machine_slot* mS, e_color_team_index cur_team) {
+    e_color_team_index dest_team = join_team;
+    if (game_started) {
+        if (pIHaloEngine->serverHeader->totalPlayers) {
+            dest_team = human_team;
+        } else if (cur_zombie_count > 0 && cur_human_count == 0) {
+            dest_team = human_team;
         }
     }
-    //return false;
+    return dest_team;
 }
-void OnFFATeamChange(IPlayer::PlayerInfo plI, char dest_team, int updatecounters) {
-    // update team counts
-    if (!updatecounters) {
+
+//RadWolfie - Approved | except for name_table is not included atm.
+CNATIVE dllAPI bool WINAPIC EXTOnPlayerChangeTeamAttempt(PlayerInfo plI, e_color_team_index dest_team, bool forceChange) {
+    if (!forceChange) {
+        if (!allow_change) {
+            pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, blockteamchange_message, 0, nullptr);
+        } else
+            pIPlayer->m_change_team(&plI, dest_team, true);
+    } else { // we can't stop the person changing teams, being done by an admin/the script
+        /*// update team counts
         if (dest_team == zombie_team) {
             cur_human_count -= 1;
             cur_zombie_count += 1;
         } else {
             cur_human_count += 1;
             cur_zombie_count -= 1;
-        }
-    }
-    // check if the game has started yet
-    if (game_init > 0) {
-        checkgamestate(plI);
-        //registertimer(200,"checkgamestate",player)
-    }
-    // update team with
-    /*local thisNAME = getname(player)
-    name_table[thisNAME] = team*/
-}
-bool validatePlayers(IPlayer::PlayerInfo plI) {
-    bool isNewPlayer = true;
-    for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-        if (_stricmp(cachePlayer->hash.c_str(), plI.plEx->CDHashA)==0) {
-            if (game_init > 1) {
-                if (cachePlayer->isZombie)
-                    makezombie(plI, false);
-                else
-                    makehuman(plI, false);
-                wchar_t msg[256];
-                customMsg->ValueGet(str1_4, msg, section_str_misc);
-                pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//rejoin_message.c_str());
-            }
-            cachePlayer->uniqueID = plI.mS->UniqueID;
-            isNewPlayer = false;
-            break;
-        }
-    }
-    if (isNewPlayer) {
-        dataTable newPlayer;
-        newPlayer.hash = plI.plEx->CDHashA;
-        newPlayer.uniqueID = plI.mS->UniqueID;
-        if (game_init > 1)
-            newPlayer.isZombie = plI.plA->Team==zombie_team;
-        cacheTable.push_back(newPlayer);
-    }
-    return isNewPlayer;
-}
-bool PlayerInHill(IPlayer::PlayerInfo plI) {
-    bool retBool = false;
-    if (plI.plS && pIHaloEngine->gameTypeGlobals->kothGlobal.isInHill[plI.plS->PlayerIndex])
-        retBool = true;
-    return retBool;
-}
-int getalphacount() {
-    // recalculate how many "alpha" zombies there are
-    //int alpha_zombie_count;
-    if (zombie_count < 1)
-        alpha_zombie_count = (int)round((pIHaloEngine->globalServer->totalPlayers * zombie_count) + 0.5);
-    else
-        alpha_zombie_count = zombie_count;
-    
-    if (alpha_zombie_count > max_zombie_count)
-        alpha_zombie_count = max_zombie_count;
-    
-    return alpha_zombie_count;
-}
-void Init() {
-    if (pIHaloEngine->mapCurrent->cam_multi_menu==1) {//This is just in case someone might initialize this while not hosting it.
-        LoadTags();
-        //reset our variables
-        cur_zombie_count = 0;
-        cur_human_count = 0;
-        resptime = 5;
-        cacheTable.clear();
-        char* map = pIHaloEngine->mapCurrent->mapName;
-        if (_stricmp(map, "putput")==0 || _stricmp(map, "longest")==0 || _stricmp(map, "beavercreek")==0 || _stricmp(map, "carousel")==0 || _stricmp(map, "wizard")==0) {
-            zombie_speed = 1.5f;
-            lastman_speed = 1.25f;
-        } else {
-            zombie_speed = 1.5f;
-            lastman_speed = 1.75f;
-        }
-        util::dynamicStack<IPlayer::PlayerInfo> plList;
-        pIPlayer->StrToPlayerList(L"*", plList, NULL);
-        for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-            validatePlayers(*plI);
-        }
-        timers[NewGameTimer] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 225); //7.5 seconds
-    }
-}
-void Uninit() {
-    if (game_init) {
-        game_init=1;
-        char i = 0;
-        do {
-            ident out_objId;
-            pIObject->Delete(oddball_flag_obj[i]);
-            i++;
-        } while(i<16);
-        pIHaloEngine->Exec("sv_map_reset");
-        game_init=0;
-    }
-}
-
-CNATIVE dllAPI void EXTOnMapLoad(ident mapTag, const wchar_t map[32]) {
-    if (pIHaloEngine->mapCurrent->cam_multi_menu==1 && game_enable) {
-        Init();
-    }
-}
-CNATIVE dllAPI void WINAPIC EXTOnEndGame(int stage) {
-    if (game_init) {
-        game_init = 0;
-    }
-    if (stage == 1) {//TODO: Need to make timer for Wizard's method. //Wait... is this done?
-        for(char i =0; i<TOTALTIMERS; i++) {
-            if (timers[i]!=-1)
-                addon::pITimer->EXTAddOnTimerDelete(timers[i]);
-        }
-    }
-}
-CNATIVE dllAPI bool WINAPIC EXTOnPlayerSpawnColor(IPlayer::PlayerInfo plI, bool isTeamPlay) {
-    if (!game_init)
-        return 1;    //1 is use default color
-    
-    for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-        if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-            if (cachePlayer->isZombie && plI.plS->ColorIndex!=COLOR_GRAY) {
-                plI.plA->ColorIndex=plI.plS->ColorIndex=COLOR_GRAY;
-            } else if (cachePlayer->isZombie)
-                break;
-            else if (isTeamPlay && !cachePlayer->isZombie && plI.plS->ColorIndex!=COLOR_SAGE)
-                plI.plA->ColorIndex=plI.plS->ColorIndex=COLOR_SAGE;
-            else if (!isTeamPlay && !cachePlayer->isZombie && game_init==1) {
-                bool reservedColors[18] = { 0 };
-                reservedColors[COLOR_GRAY]=true;
-                util::dynamicStack<IPlayer::PlayerInfo> plList;
-                pIPlayer->StrToPlayerList(L"*", plList, NULL);
-                for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plIp = plList.begin(); plIp != NULL; plIp++) {
-                    reservedColors[plIp->plS->ColorIndex]=1;
-                }
-                char i=0;
-                while(reservedColors[i]) {
-                    if (i>17)
-                        RaiseException(STATUS_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, NULL);
-                    i++;
-                }
-                plI.plA->ColorIndex=plI.plS->ColorIndex=i;
-            }
-            break;
-        }
-    }
-    return !isTeamPlay;    //0 is use custom color even in TeamPlay mode.
-}
-//This is moved & modified section.
-/* DON'T USE THIS!
-CNATIVE dllAPI int WINAPIC EXTOnPlayerJoinDefault(MachineS* mS, int cur_team) {
-    if (!pIHaloEngine->gameTypeLive->isTeamPlay) {
-        // initialize the destination team as the join team
-        int dest_team = join_team;
-        // make sure the game is started
-        if (game_init) {
-            // if no zombies make them human
-            if (cur_human_count == 0) {
-                dest_team = human_team;
-            }
-        }
-        // we need to overwrite the 'team' variable being passed to onplayerjoin
-        return dest_team;
-    }
-    return -1;
-}//*/
-CNATIVE dllAPI void WINAPIC EXTOnPlayerJoin(IPlayer::PlayerInfo plI) {
-    // update the player counts
-    //pIHaloEngine->globalServer->totalPlayers += 1;
-    //TODO: Don't think need this since it's called from player join default team function.
-    // onteamdecision isn't called for ffa gametypes
-    /*if (!team_play) {
-        // initialize the destination team as the join team
-        bool dest_team = join_team;
-        // make sure the game is started
-        if (game_init) {
-            // if no zombies make them human
-            if (cur_human_count == 0) {
-                dest_team = human_team;
-            }
-        }
-        // we need to overwrite the 'team' variable being passed to onplayerjoin
-        team = dest_team;
-    }*/
-    int thisTeamSize = 0; // used so we don't create empty teams for rejoining players
-    if (plI.plA->Team == zombie_team) {
-        cur_zombie_count += 1;
-        thisTeamSize = cur_zombie_count;
-    } else {
-        cur_human_count = 1;
-        thisTeamSize = cur_human_count;
-    }
-    alpha_zombie_count = getalphacount();
-    //std::wstring thisNAME = plI.plS->Name;
-    // check if the player has joined this game previously
-    bool isNewPlayer = validatePlayers(plI);
-    // make sure the game is started
-    if (game_init) {
-        // check if the player is a zombie
-        wchar_t msg[256];
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-                if (cachePlayer->isZombie) {
-                    //we don't need to update the counters since they're already on the zombieteam
-                    if (!isNewPlayer)
-                        makezombie(plI, false, true);
-                    //send them the zombie message
-                        customMsg->ValueGet(str1_8, msg, section_str_misc);
-                    pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//zombie_message.c_str());
-                } else {
-                    // if we're at last man, make this player a zombie
-                    if (cur_last_man.mS) {
-                        //make this person a zombie (they're currently a human)
-                        if (!isNewPlayer)
-                            makezombie(plI, true);
-                        //send them the zombie message
-                        customMsg->ValueGet(str1_8, msg, section_str_misc);
-                        pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//zombie_message.c_str());
-                    } else {
-                        //make this person a human (they're currently a zombie)
-                        if (!isNewPlayer)
-                            makehuman(plI, false, true);
-                        //send them the human message
-                        customMsg->ValueGet(str1_7, msg, section_str_misc);
-                        pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//human_message.c_str());
-                    }
-                }
-                //send the player the welcome message
-                customMsg->ValueGet(str1_0, msg, section_str_welcome);
-                pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//welcome_message.c_str());
-                if (pIHaloEngine->gameTypeLive->GameStage == GAMETYPE_KOTH) {
-                        customMsg->ValueGet(str2_0, msg, section_str_welcome);
-                        pIPlayer->sendCustomMsg(MSG_BLANK, 0, plI, msg);//koth_additional_welcome_msg.c_str());
-                } else if (pIHaloEngine->gameTypeLive->GameStage == GAMETYPE_SLAYER /*/&& gametype_indicator == 1/*/) {
-                    //Nothing here
-                }
-                break;
-            }
-        }
-        checkgamestate(pl_null);
-        //registertimer(200,"checkgamestate",-1);
-    } else {
-        //registertimer(10000, "MsgTimer", player);
-    }
-}
-CNATIVE dllAPI void WINAPIC EXTOnPlayerQuit(IPlayer::PlayerInfo plI) {
-    if (game_init) {
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-                //check if they're a zombie
-                if (cachePlayer->isZombie) {
-                    //take one away from the current zombie count
-                    cur_zombie_count -= 1;
-                } else {
-                    //take one away from the current human count
-                    cur_human_count -= 1;
-                }
-                BipedS* pl_biped = (BipedS*)pIObject->GetObjectAddress(plI.plS->PreviousBiped);
-                if (pl_biped) {
-                    char i = 0;
-                    while (i<4) {
-                        if(pl_biped->Equipments[i].Tag!=-1) {
-                            WeaponS* weap = (WeaponS*)pIObject->GetObjectAddress(pl_biped->Equipments[i]);
-                            if (weap->sObject.GameObject==-1) {
-                                if (weap->sObject.ModelTag.Tag != oddball_tag_id->id.Tag)
-                                    pIObject->Delete(pl_biped->Equipments[i]);
-
-                            }
-                        }
-                        i++;
-                    }
-                    pIObject->Delete(plI.plS->CurrentBiped);
-                }
-                break;
-            }
-        }
-    }
-    //if last man is leaving, reset it
-    if (cur_last_man.mS == plI.mS) {
-        cur_last_man = IPlayer::PlayerInfo();
-    }
-    //check the current game state (the player that left might have been the last man or the only zombie)
-    checkgamestate(pl_null);
-    //registertimer(1000,"checkgamestate",-1);
-
-}
-
-CNATIVE dllAPI void WINAPIC EXTOnPlayerSpawn(IPlayer::PlayerInfo plI, ident owningObjectId, BipedS* pl_Biped) {
-    if (!game_init)
-        return;
-    //activateFlashlight[player] = nil
-    //check if the player is a zombie
-    if (plI.plA->Team == zombie_team) {
-
-        //get the player's object ID
-        //make sure the player is alive (off chance that there's a glitch in phasor)
-        if (plI.plS->CurrentBiped.Tag==-1) {
-            return;
-        }
-
-        //get the player's object struct
-        //local m_object = getobject(m_objectId)
-        BipedS* m_object = (BipedS*)pIObject->GetObjectAddress(plI.plS->CurrentBiped);
-
-        //set nade counts
-        m_object->grenade0 = zombie_frag_count;
-        m_object->grenade1 = zombie_plasma_count;
-
-        //set the ammo
-        int clipcount = alphazombie_clip_count;
-        int ammocount = alphazombie_ammo_count;
-        float batterycount = alphazombie_battery_count;
-
-        //set ammo counts for zombies when others have been infected
-        if (cur_zombie_count > alpha_zombie_count) {
-            clipcount = zombie_clip_count;
-            ammocount = zombie_ammo_count;
-            batterycount = zombie_battery_count;
-        } else { //set alpha nades
-            m_object->grenade0 = alphazombie_frag_count;
-            m_object->grenade1 = alphazombie_plasma_count;
-        }
-        
-        //check if the starting equipment is generic
-        //Quite honestly... this isn't needed...
-        /*if starting_equipment == "Generic" {
-
-            //initialize this boolean as false
-            local bool = false
-            for i=0,3 do --loop through the player's weapons (primary through quartenary)
-
-                 //get the player's weapon's ID
-                    local m_weaponId = readdword(m_object + 0x2F8 + i*4)
-
-                 //check if the zombie weapon is an oddball or a flag
-                    if oddball_or_flag {
-
-                     //make sure the boolean is still false and the player's weapon exists.
-                        if bool == false and getobject(m_weaponId) {
-
-                         //get the weapon's tagname
-                            local tagName = getobjecttag(m_weaponId)
-
-                         //make sure the weapon's tagname is the zombie weapon (oddball/flag)
-                            if tagName == oddball_or_flag {
-
-                             //store the weapon's ID in the flagball_weap table
-                                flagball_weap[player] = m_weaponId
-
-                             //set bool to true
-                                bool = true
-                            }
-                        }
-
-                 //zombie weapon is not a flag or a ball
-                    } else if ( m_weaponId ~= 0xFFFFFFFF {
-
-                     //get the weapon's struct
-                        local m_weapon = getobject(m_weaponId)
-
-                     //make sure the weapon exists
-                        if m_weapon {
-
-                            //set the ammo
-                            writeword(m_weapon + 0x2B6, ammocount)
-                            writeword(m_weapon + 0x2B8, clipcount)
-
-                            //set the battery (math.abs is absolute value meaning it takes the opposite of battery count (meaning 0 needs to be 1 and 1 needs to be 0))
-                            writefloat(m_weapon + 0x240, math.abs(batterycount - 1))
-
-                            //force it to sync
-                            updateammo(m_weaponId)
-                        }
-                    }
-                }
-
-            //check if we still need to assign leftover weapons to zombies (tertiary and quartenary weapons)
-            if (zombie_weapon[3] and zombie_weapon[3] ~= "") { //make sure the script user isn't retarded
-             //assign the leftover weapons to the player
-                local table = {player, clipcount, ammocount, batterycount}
-                registertimer(0, "AssignLeftoverZombieWeapons", table)
-            }
-        else if starting_equipment == "Custom" {
-         //assign the correct weapons to the player
-            table = {player, clipcount, ammocount, batterycount}
-            registertimer(0, "AssignZombieWeapons", table)
         }*/
-    }
+        //TODO: RadWolfie - This is just a fix portion, might be temporary solution for now.
+        // recalculate team counters
+        cur_human_count = pIPlayer->m_get_str_to_player_list(human_team == COLOR_TEAM_BLUE ? teamBlueStr : teamRedStr, nullptr, nullptr);
+        cur_zombie_count = pIPlayer->m_get_str_to_player_list(zombie_team == COLOR_TEAM_BLUE ? teamBlueStr : teamRedStr, nullptr, nullptr);
 
- //check if the gametype is slayer
-    if (pIHaloEngine->gameTypeLive->GameStage == GAMETYPE_SLAYER) {
-     //check if we're at the last_man
-
-        //TODO: Need find out which structure is setting the nat point. (WEIRD, okay it does not seems to work...)
-        if (cur_last_man.mS) { //write the navpoint to the current last man
-            //writeword(m_player + 0x88, cur_last_man)
-        } else {
-            //writeword(m_player + 0x88, player) //there is no last man so put a nav above this player's head
-        }
-
-    }
-
-}
-
-/*
-//basically this timer assigns the tertiary and quarternary weapons to zombies if specified at the top
-//this is needed since onweaponassignment isn't called for tertiary and quartenary weapons
-function AssignLeftoverZombieWeapons(id, count, player, data)
-    local clipcount = data[1]
-    local ammocount = data[2]
-    local batterycount = data[3]
-    local m_object = getplayerobject(player)
-    if m_object {
-        if zombie_weapon[3] and zombie_weapon[3] ~= "" {
-            local m_weaponId = createobject(gettagid("weap", zombie_weapon[3]), 0, 60, false, 5, 2, 2)
-            if m_weaponId and m_weaponId ~= 0xFFFFFFFF {
-                local m_weapon = getobject(m_weaponId)
-                if m_weapon {
-                    -- set the ammo
-                    writeword(m_weapon + 0x2B6, ammocount)
-                    writeword(m_weapon + 0x2B8, clipcount)
-                    writefloat(m_weapon + 0x240, math.abs(batterycount - 1))
-                    -- force it to sync
-                    updateammo(m_weaponId)
-                }
-            }
-            --make sure the script user isn't retarded so we don't get errors
-            if zombie_weapon[4] and zombie_weapon[4] ~= "" {
-        
-                --create the quarternary weapon
-                local m_weaponId = createobject(gettagid("weap", zombie_weapon[4]), 0, 60, false, 1, 1, 1)
-
-                --make sure createobject didn't screw up
-                if m_weaponId ~= 0xFFFFFFFF {
-
-                    --assign the weapon to the player
-                    assignweapon(player, m_weaponId)
-
-                    --make sure we can safely set the ammo
-                    local m_weapon = getobject(m_weaponId)
-                    if m_weapon {
-                        -- set the ammo
-                        writeword(m_weapon + 0x2B6, ammocount)
-                        writeword(m_weapon + 0x2B8, clipcount)
-                        writefloat(m_weapon + 0x240, math.abs(batterycount - 1))
-                        -- force it to sync
-                        updateammo(m_weaponId)
-                    }
-                }
-            }
-        }
-    }
-    return false
-}
-
-function AssignZombieWeapons(id, count, table)
-    local player = table[1]
-    local clipcount = table[2]
-    local ammocount = table[3]
-    local batterycount = table[4]
-    if not player or not getplayer(player) {
-        return false
-    }
-    local m_object = getplayerobject(player)
-    if m_object {
-        --count is increased everytime the timer is called
-        if count == 1 {
-            -- gets rid of any weapons a zombie is holding
-            destroyweapons(player)
-        }
-        local i = count
-        if zombie_weapon and zombie_weapon[i] and zombie_weapon[i] ~= "" {
-            local m_weaponId = createobject(gettagid("weap", zombie_weapon[i]), 0, 60, false, 1, 1, 1)
-            if m_weaponId and m_weaponId ~= 0xFFFFFFFF {
-                assignweapon(player, m_weaponId)
-                if oddball_or_flag == readdword(getobject(m_weaponId)) {
-                    flagball_weap[player] = m_weaponId
-                else
-                    local m_weapon = getobject(m_weaponId)
-                    if m_weapon {
-                        -- set the ammo
-                        writeword(m_weapon + 0x2B6, ammocount)
-                        writeword(m_weapon + 0x2B8, clipcount)
-                        writefloat(m_weapon + 0x240, 1)
-                        -- force it to sync
-                        updateammo(m_weaponId)
-                    }
-                }
-            }
-        }
-        if count < 4 { return true else return false }
-    }
-    return false
-}
-//*/
-
-CNATIVE dllAPI void WINAPIC EXTOnWeaponAssignmentDefault(IPlayer::PlayerInfo plI, ident owningObjectId, IObject::objInfo* curWeapon, DWORD order, ident& newWeaponId) {
-    if (game_init && plI.plS) {
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-                if (cachePlayer->isZombie) {
-                    if (order==0) {
-                        //newWeaponId.Tag=oddball_tag_id->id.Tag;
-                        pIObject->EquipmentAssign(owningObjectId, oddball_flag_obj[plI.mS->machineIndex]);
-                    }// else
-                        newWeaponId.Tag=-1;
-                }
-                break;
-            }
-        }
-    }
-}
-CNATIVE dllAPI void WINAPIC EXTOnWeaponAssignmentCustom(IPlayer::PlayerInfo plI, ident owningObjectId, ident curWeapon, DWORD order, ident& newWeaponId) {
-    if (game_init && plI.plS) {
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-                if (cachePlayer->isZombie)
-                    newWeaponId.Tag=-1;
-                break;
-            }
-        }
-    }
-}
-
-//No such thing for EXTOnObjectCreation yet.
-/*function OnObjectCreationAttempt(mapId, parentId, player)
-    if gametype == "GAMETYPE_CTF" and mapId == flag_tag_id and parentId == nil {
-        registertimer(0, "PutUnderMap", readdword(ctf_globals + 0x8))
-    }
-    --return nil
-}*/
-CNATIVE dllAPI bool EXTOnObjectInteraction(IPlayer::PlayerInfo plI, ident obj_id, ObjectS* m_object, IObject::hTagHeader* hTag) {
-    bool response = true;
-    if (game_init > 1) {
-        wchar_t msg[256] = { NULL };
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-                if (cachePlayer->isZombie) {
-                    BipedS* m_biped = (BipedS*)pIObject->GetObjectAddress(plI.plS->CurrentBiped);
-                    if (hTag == camouflage_tag_id)  {
-                        if (m_biped) {
-                            if (m_biped->IsInvisible!=0x51) {
-                                rand();
-                                //int doInvis = randomRange(1, 11);
-                                int doInvis = 1+rand()%10;
-                                if (doInvis > 5) {
-                                    // make the whole zombie team invis for 30 seconds
-                                
-                                    util::dynamicStack<IPlayer::PlayerInfo> plList;
-                                    pIPlayer->StrToPlayerList(L"*", plList, NULL);
-                                    for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-                                        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-                                            if (cachePlayer->uniqueID == plI->mS->UniqueID) {
-                                                if (plI->plEx->isInServer && cachePlayer->isZombie) {
-                                                    pIPlayer->applyCamo(*plI, 30);
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    customMsg->ValueGet(str1_4, msg, section_str_misc);
-                                    pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg);//zombieinvis_message.c_str());
-                                }
-                            }
-                        }
-                    } else if (hTag == overshield_tag_id || hTag == healthpack_tag_id) {
-                        //response = nil
-                    } else if ((hTag == oddball_tag_id || hTag == flag_tag_id) && m_object->GameObject != -1 && m_object->GameObject!=plI.plA->Team) {
-                        if (oddball_flag_obj[plI.mS->machineIndex].Tag==m_biped->sObject.Weapon.Tag ) {
-                            WeaponS* m_oddball_flag = (WeaponS*)pIObject->GetObjectAddress(m_biped->sObject.Weapon);
-                            ident oddball_flag_id = m_biped->sObject.Weapon;
-                            pIObject->EquipmentDropCurrent(plI.plS->CurrentBiped);
-                            vect3 loc = vect3(0.0f, 0.0f, 0.0f);
-                            pIObject->MoveAndReset(oddball_flag_id, &loc);
-                            //pIObject->Update(oddball_flag_id);
-                            /*IObject::objManaged managed;
-                            managed.rotation=m_oddball_flag->sObject.Rotation;
-                            managed.scale=m_oddball_flag->sObject.Scale;
-                            managed.velocity=loc;
-                            managed.world=loc;
-                            pIObject->Move(oddball_flag_id, managed);*/
-                            //pIObject->MoveAndReset(obj_id, NULL);
-                            //pIObject->EquipmentAssign(plI.plS->CurrentBiped, obj_id);
-                            //response = false;
-                        }
-                    } else// if (obj_id.Tag == fragnade_tag_id->id || obj_id.Tag == plasmanade_tag_id->id) {
-                        response = false;
-                    //}
-                } else {
-                    //response = nil
-                }
-                break;
-            }
-        }
-    }
-    return response;
-}
-CNATIVE dllAPI void WINAPIC EXTOnPlayerDeath(IPlayer::PlayerInfo killerI, IPlayer::PlayerInfo victimI, int mode, bool& showMessage) {
-    if (!game_init) return;
-    bool response = true;
-    std::vector<dataTable>::iterator* cacheKiller = NULL;
-    std::vector<dataTable>::iterator* cacheVictim = NULL;
-    if (killerI.mS)
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == killerI.mS->UniqueID) {
-                cacheKiller = &cachePlayer;
-                break;
-            }
-        }
-    if (victimI.mS)
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == victimI.mS->UniqueID) {
-                cacheVictim = &cachePlayer;
-                break;
-            }
-        }
-    // make sure this kill doesn't add to the score so that the game won't end prematurely
-    if (pIHaloEngine->gameTypeLive->GameStage == GAMETYPE_SLAYER && killerI.plS) {
-        pIHaloEngine->gameTypeGlobals->slayerGlobal.playerScore[killerI.plA->PlayerIndex]=0;
-    }
-    // make sure the game is started
-    if (game_init==1) {
-        showMessage=false;
-        BipedS* z_Biped = (BipedS*)pIObject->GetObjectAddress(victimI.plS->CurrentBiped);
-        ObjectS* weapon;
-        for (char i = 0; i<4; i++) {
-            weapon = pIObject->GetObjectAddress(z_Biped->Equipments[i]);
-            if (weapon && weapon->GameObject==-1) {
-                if (weapon->ModelTag.Tag == oddball_tag_id->id.Tag)
-                    //pIObject->Delete(z_Biped->Equipments[i]);
-                    pIObject->Eject(z_Biped->Equipments[i]);
-            }
-        }
-    } else if (game_init > 1) {
-        wchar_t msg[256];
-        // get the victim's team
-        if (victimI.plS && cacheVictim->_Ptr->isZombie) {
-            // gets rid of any weapons a zombie is holding
-            BipedS* z_Biped = (BipedS*)pIObject->GetObjectAddress(victimI.plS->CurrentBiped);
-            ObjectS* weapon;
-            for (char i = 0; i<4; i++) {
-                weapon = pIObject->GetObjectAddress(z_Biped->Equipments[i]);
-                if (weapon && weapon->GameObject==-1) {
-                    if (weapon->ModelTag.Tag == oddball_tag_id->id.Tag)
-                        //pIObject->Delete(z_Biped->Equipments[i]);
-                        pIObject->Eject(z_Biped->Equipments[i]);
-                }
-            }
-        }
-        if (victimI.plS) {
-            if (resptime) {
-                victimI.plS->RespawnTimer = resptime * 33;
-            } else if (cacheVictim->_Ptr->isZombie) {
-                victimI.plS->RespawnTimer = zombie_spawn_time * 33;
-            } else {
-                victimI.plS->RespawnTimer = human_spawn_time * 33;
-            }
-        }
-        if (mode == 0) { // server kill
-        } else if (mode == 1 && !map_reset_boolean) {// fall damage
-            // if this is true end a person who dies from falling will be infected
-            if (infect_on_fall) {
-                if (!cacheVictim->_Ptr->isZombie) {
-                    response = false;
-                    customMsg->ValueGet(str1_0, msg, section_str_deaths);
-                    pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*falling_infected_message.c_str()*/, victimI.plS->Name);
-                    makezombie(victimI, false);
-                    //registertimer(100, "makezombiedelay", {victim, true})
-                } else if (victimI.plA->Team != human_team) {
-                    customMsg->ValueGet(str1_1, msg, section_str_deaths);
-                    if (wcslen(msg)) {//falling_death_message.length()) {
-                        response = false;
-                        customMsg->ValueGet(str1_0, msg, section_str_deaths);
-                        pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*falling_death_message.c_str()*/, victimI.plS->Name);
-                    }
-                }
-            } else if (!infect_on_fall) {
-                customMsg->ValueGet(str1_1, msg, section_str_deaths);
-                if (wcslen(msg)) {//falling_death_message.length()) {
-                    response = false;
-                    pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*falling_death_message.c_str()*/, victimI.plS->Name);
-                }
-            }
-        } else if (mode == 2) {// killed by guardians
-            if (infect_on_guardians) {
-                if (!cacheVictim->_Ptr->isZombie) {
-                    response = false;
-                    customMsg->ValueGet(str4_0, msg, section_str_infected);
-                    pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*guardian_infected_message.c_str()*/, victimI.plS->Name);
-                    makezombie(victimI, false);
-                }
-            } else if (!infect_on_guardians) {
-                customMsg->ValueGet(str4_0, msg, section_str_infected);
-                if (wcslen(msg)) {//guardian_death_message.length()) {
-                    response = false;
-                    pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*guardian_death_message.c_str()*/, victimI.plS->Name);
-                }
-            }
-        } else if (mode == 3) {// killed by vehicle
-        } else if (mode == 4) {// killed by another player
-            if (cacheKiller->_Ptr->isZombie && !cacheVictim->_Ptr->isZombie) {
-                response = false;
-                customMsg->ValueGet(str1_0, msg, section_str_infected);
-                pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*kill_infected_message.c_str()*/, killerI.plS->Name, victimI.plS->Name);
-                makezombie(victimI, false);
-                customMsg->ValueGet(str1_8, msg, section_str_misc);
-                pIPlayer->sendCustomMsg(MSG_BLANK, 1, victimI, msg /*zombie_message.c_str()*/);
-                cacheKiller->_Ptr->human_time+=30;
-                if (cacheKiller->_Ptr->zombie_kills) {
-                    cacheKiller->_Ptr->zombie_kills+=1;
-                    if (cacheKiller->_Ptr->zombie_kills>4) {
-                        cacheKiller->_Ptr->zombie_kills=0;
-                        customMsg->ValueGet(str1_9, msg, section_str_misc);
-                        pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*L"%s is now a human because they infected 5 times!"*/, killerI.plS->Name);
-                        makehuman(killerI, true);
-                        //registertimer(100, "makehumandelay", {killer, true})
-                    }
-                } else
-                    cacheKiller->_Ptr->zombie_kills=1;
-            } else if (!cacheKiller->_Ptr->isZombie && cacheVictim->_Ptr->isZombie) {
-                response = false;
-                customMsg->ValueGet(str4_0, msg, section_str_deaths);
-                pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*human_kill_message.c_str()*/, killerI.plS->Name, victimI.plS->Name);
-                if (!cur_last_man.plS) {
-                    if (victimI.mS && killerI.mS) {
-                        ObjectS* cur_weap = pIObject->GetObjectAddress(killerI.plS->CurrentBiped);
-                        cur_weap = pIObject->GetObjectAddress(cur_weap->Weapon);
-                        if (cur_weap) {
-                            IObject::hTagHeader* ammoTag = pIObject->LookupTag(cur_weap->ModelTag);
-                            if (ammoTag->tagType1 == IObject::TAG_WEAP) {
-                                ident out_objId;
-                                vect3 location = victimI.plS->World;
-                                location.z+=1;
-                                ident parentId;
-                                pIObject->Create(cur_weap->ModelTag, parentId, 60, out_objId, &location);
-                            }
-                        }
-                    }
-                }
-                cacheKiller->_Ptr->human_time+=5;
-                //This is not in the code...
-                /*if (cur_last_man.mS) {
-                    //TODO: This need to be process for spawn weapon or ammo where last survival is at.
-                }//*/
-            }
-        } else if (mode == 5) {// betrayed
-            if (infect_on_betrayal) {
-                if (!cacheKiller->_Ptr->isZombie) {
-                    response = false;
-                    customMsg->ValueGet(str3_0, msg, section_str_infected);
-                    pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*teammate_infected_message.c_str()*/, killerI.plS->Name, victimI.plS->Name);
-                    makezombie(killerI, false);
-                } else if (killerI.plA->Team != human_team) {
-                    response = false;
-                    pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, L"%s has betrayed %s", killerI.plS->Name, victimI.plS->Name);
-                }
-            } else {
-                response = false;
-                pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, L"%s betrayed %s", killerI.plS->Name, victimI.plS->Name);
-            }
-        } else if (mode == 6) {// suicide
-            if (infect_on_suicide) {
-                if (!cacheVictim->_Ptr->isZombie) {
-                    response = false;
-                    customMsg->ValueGet(str2_0, msg, section_str_infected);
-                    pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*suicide_infected_message.c_str()*/, victimI.plS->Name);
-                    makezombie(victimI, false);
-                }
-            } else {
-                response = false;
-                    customMsg->ValueGet(str2_0, msg, section_str_deaths);
-                pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg /*suicide_message.c_str()*/, victimI.plS->Name);
-            }
-        }
-    }
-    //registertimer(200,"checkgamestate",victim)
-    showMessage = response;
-}
-
-
-CNATIVE dllAPI int WINAPIC EXTOnPlayerJoinDefault(MachineS* mS, int cur_team) {
-    if (game_init > 1) {
-        if (pIHaloEngine->globalServer->totalPlayers == 0) {// if no zombies make them human
-            cur_team = human_team;
-        } else if (cur_zombie_count > 0 && cur_human_count == 0) {
-            cur_team = human_team;
-        } else
-            cur_team = zombie_team;
-    }
-    return cur_team;
-}
-CNATIVE dllAPI bool WINAPIC EXTOnPlayerChangeTeamAttempt(IPlayer::PlayerInfo plI, int team, bool forceChange) {
-    wchar_t msg[256];
-    if (!forceChange) {
-        if (!allow_change) {
-            customMsg->ValueGet(str1_0, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blockteamchange_message.c_str());
-        } else if (team == zombie_team) {
-            // this is so memory is updated for processing
-            // when voluntary is 0 OnTeamChange is called once the changes
-            // have been 
-            pIPlayer->changeTeam(plI, zombie_team, true);
-            plI.plS->VelocityMultiplier = zombie_speed;
-        }
-        // we don't let people change team
-    
-    } else { // we can't stop the person changing teams, bein done by an admin
-        // update team counts
-        if (team == zombie_team) {
-            cur_human_count -= 1;
-            cur_zombie_count += 1;
-        } else if (team != zombie_team) {
-            cur_human_count += 1;
-            cur_zombie_count -= 1;
-        }
         // they're allowed to change if the timer is active, if it is disable it
-        if (allow_change && team == zombie_team) {
+        if (allow_change && dest_team == zombie_team) {
             allow_change = false;
-            //remove change timer
-            /*if player_change_timer {
-                removetimer(player_change_timer)
-                player_change_timer = nil
-            }*/
-            customMsg->ValueGet(str1_6, msg, section_str_misc);
-            pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg);//timer_team_change_msg.c_str());
+            // remove change timer
+            for (std::vector<dTimer>::iterator iTimer = vTimer.begin(); iTimer != vTimer.end(); iTimer++) {
+                if (iTimer->eFunc == ePlayerChangeTimer) {
+                    pITimer->m_delete(EAOHashID, iTimer->TimerID);
+                    vTimer.erase(iTimer);
+                    hasPlayerChangeTimer = false;
+                    break;
+                }
+            }
+            pIPlayer->m_send_custom_message_broadcast(MF_BLANK, timer_team_change_msg, 0, nullptr);
         }
+
         // check if the game has started yet
-        if (game_init > 1) {
+        if (game_started) {
             // set attributes
-            if (team == zombie_team) {
-                makezombie(plI, true);
+            if (dest_team == zombie_team) {
+                makezombie(plI, false);
             } else {
-                makehuman(plI, true);
+                makehuman(plI, false);
             }
-            checkgamestate(plI);
-            //registertimer(200,"checkgamestate",player)
+            //registertimer(200, "checkgamestate", playerId)
+            UINT id = pITimer->m_add(EAOHashID, &plI, 6); // 200 milliseconds - checkgamestate for victim
+            if (id)
+                vTimer.push_back({ id, eCheckGameState, plI.plR->MachineIndex });
         }
-        // update team
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-                cachePlayer->isZombie = (team==zombie_team);
-                break;
-            }
-        }
+
+        // Update team
+        /*TODO: Need to implement support for store team changed data if player decide to quit.
+        local thisNAME = getname(playerId)
+        name_table[thisNAME] = team
+        */
     }
     return allow_change;
 }
 
-//function OnDamageApplication(receiving, causing, tagid, hit, backtap)
-CNATIVE dllAPI bool EXTOnObjectDamageApplyProcess(const IObject::objDamageInfo& damageInfo, ident& obj_recv, IObject::objHitInfo& hitInfo, bool isBacktap, bool& allowDamage, bool isManaged) {
+//RadWolfie - Approved
+CNATIVE dllAPI bool EXTOnObjectDamageApplyProcess(const objDamageInfo* damageInfo, s_ident* obj_recv, objHitInfo* hitInfo, bool isBacktap, bool* allowDamage, bool isManaged) {
 
-    IPlayer::PlayerInfo causer = pIPlayer->getPlayerIdent(damageInfo.player_causer);
-    IPlayer::PlayerInfo receiver = pIPlayer->getPlayerIdent(obj_recv);
-    if (isBacktap && causer.mS && receiver.mS) {
-        if (causer.plA->Team == zombie_team && receiver.plA->Team == human_team) {
-            wchar_t msg[256];
-            customMsg->ValueGet(str5_0, msg, section_str_infected);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, causer, msg);//zombie_backtap_message.c_str());
-        }
-    }
-    return false;
-}
-
-//function OnDamageLookup(receiving, causing, mapId, tagdata)
-CNATIVE dllAPI bool EXTOnObjectDamageLookupProcess(IObject::objDamageInfo& damageInfo, ident& obj_recv, bool& allowDamage, bool isManaged) {
-    IPlayer::PlayerInfo causer = pIPlayer->getPlayerIdent(damageInfo.player_causer);
-    IPlayer::PlayerInfo receiver = pIPlayer->getPlayerIdent(obj_recv);
-    if (causer.mS && receiver.mS) {
-        if (!pIHaloEngine->gameTypeLive->isTeamPlay && causer.mS != receiver.mS && receiver.plA->Team == causer.plA->Team) {
-            return false;
-        }
-        // if it's a human causing the damage
-        if (causer.plA->Team != zombie_team) {
-            if (cur_last_man.mS) {
-                damageInfo.modifier = lastman_dmgmodifier;
-            } else {
-                damageInfo.modifier = human_dmgmodifier;
-            }
-        // It's a zombie causing the damage
-        } else if (causer.plA->Team == zombie_team) {
-            IObject::hTagHeader* tagType = pIObject->LookupTag(damageInfo.tag_id);
-            std::string tagName = tagType->tagName;
-            // check if it is melee damage
-            if (tagName.find("melee", -5)) {
-                damageInfo.modifier = 9999;
-            }
-        }
-    }
-    return false;
-}
-
-CNATIVE dllAPI bool WINAPIC EXTOnVehicleUserEntry(IPlayer::PlayerInfo plI, bool forceEntry) {
-    if (forceEntry)
+    // If this is set then we do NOT want this function to modify damage.
+    if (dontModifyDmg)
         return true;
-    if (game_init > 1) {
-        if ((plI.plA->Team == zombie_team && zombies_allowed_in_vehis) || (plI.plA->Team != zombie_team && humans_allowed_in_vehis)) {
+
+    PlayerInfo causer;
+    PlayerInfo receiver;
+    pIPlayer->m_get_ident(damageInfo->player_causer, &causer);
+    s_biped* reciever_biped = (s_biped*)pIObject->m_get_address(*obj_recv);
+    if (reciever_biped) {
+        pIPlayer->m_get_ident(reciever_biped->PlayerOwner, &receiver);
+    }
+
+    if (isBacktap && causer.mS && receiver.mS) {
+        if (causer.plR->Team == zombie_team) {
+            if (receiver.plR->Team == human_team) {
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &causer, zombie_backtap_message, 0, nullptr);
+            } else { //Don't allow zombies to backtap each other
+                return false;
+            }
+        }
+    } else if ((DWORD)hitInfo->desc == 'head') {
+
+        //RadWolfie - 2 ^ 5 which is 7 decimal, aka 0.0-0.2 bitfield offset. However, bitfield 0.2 cause instant death.
+        // Wizard wants to ignore shield. So, let's go with that instead.
+        objDamageFlags flags = { 0 };
+        flags.ignoreShield = 1;
+
+        pIObject->m_apply_damage_generic(*obj_recv, damageInfo->player_causer, 5.0f, flags); // More damage for headshot.
+    }
+    return true;
+}
+
+//RadWolfie - Approved
+CNATIVE dllAPI bool EXTOnObjectDamageLookupProcess(objDamageInfo* damageInfo, s_ident* obj_recv, bool* allowDamage, bool isManaged) {
+    PlayerInfo causer;
+    PlayerInfo receiver;
+
+    // If this is set then we do NOT want this function to modify damage.
+    if (dontModifyDmg)
+        return true;
+    if (damageInfo->tag_id.Tag == falling_tag_id->ident.Tag || damageInfo->tag_id.Tag == distance_tag_id->ident.Tag)
+        return true;
+    if (damageInfo->causer.Tag == -1)
+        return true;
+
+    pIPlayer->m_get_ident(damageInfo->player_causer, &causer);
+    s_biped* reciever_biped = (s_biped*)pIObject->m_get_address(*obj_recv);
+    if (reciever_biped) {
+        pIPlayer->m_get_ident(reciever_biped->PlayerOwner, &receiver);
+    }
+    if (causer.mS && causer.plR->Team == zombie_team) {
+        damageInfo->modifier = 9999;
+    // Otherwise use human modifier
+    } else if (causer.mS) {
+
+        // else use normal modifier;
+        float modifier = cur_last_human.mS ? lastman_dmgmodifier : human_dmgmodifier;
+
+        // Check if melee/explosive/grenade damage
+        hTagHeader* tagHeader = pIObject->m_lookup_tag(damageInfo->tag_id);
+        PBYTE tagdata = (PBYTE)tagHeader->group_meta_tag;
+        short dmg_damage_category = *(short*)(tagdata + 0x1C6);
+
+        // I HATE the fuelrod.
+        if (damageInfo->tag_id.Tag == fuel_dmg1_id->ident.Tag || damageInfo->tag_id.Tag == fuel_dmg2_id->ident.Tag || damageInfo->tag_id.Tag == fuel_dmg3_id->ident.Tag || damageInfo->tag_id.Tag == fuel_dmg4_id->ident.Tag) {
+            struct s_bitfields {
+                bool isAirborne : 1;
+                char unknown : 7;
+            };
+            s_bitfields bitfields = *(s_bitfields*)((char*)reciever_biped + 0x4CC);
+
+            modifier = bitfields.isAirborne ? 0.5f : 1.0f;
+        } else {
+            switch (dmg_damage_category) {
+                default: 
+                    break;
+                case 3: // Check for explosive/grenade damage.
+                case 4: // Check for explosive/grenade damage.
+                    modifier = 9999.0f;
+                    break;
+                // Check if flame damage.
+                case 7:
+
+                    // We don't want them to be able to damage themself with the flamethrower.
+                    if (obj_recv->Tag == damageInfo->causer.Tag)
+                        return false;
+
+                    // Triple the flamethrower damage.
+                    modifier = 3.0f;
+                    break;
+                case 5:
+                    // Triple sniper damage for humans.
+                    modifier = 3.0f;
+                    break;
+            }
+        }
+        damageInfo->flags.ignoreShield = 1; // Ignore shields
+        damageInfo->modifier = modifier; // Set human damage to zombies.
+    }
+    //RadWolfie - To prevent crash if no receiver or causer has been found.
+    if (!(receiver.mS != nullptr && causer.mS != nullptr)) {
+
+    } else if (receiver.mS != causer.mS && causer.plR->Team == human_team && receiver.plR->Team == human_team) {
+        return false;
+    } else if (causer.plR->Team == zombie_team && receiver.plR->Team == zombie_team) {
+        damageInfo->modifier = 0.0001f;
+    }
+
+
+    return false;
+}
+
+//RadWolfie - Approved
+CNATIVE dllAPI bool WINAPIC EXTOnVehicleUserEntry(PlayerInfo plI, bool forceEntry) {
+    if (game_started && !forceEntry) {
+        if ((plI.plR->Team == zombie_team && zombies_allowed_in_vehis) || (plI.plR->Team == human_team && humans_allowed_in_vehis)) {
             return true;
         }
     }
     return false;
 }
 
-CNATIVE dllAPI bool WINAPIC EXTOnPlayerAttemptDropObject(IPlayer::PlayerInfo plI, ident owningObjectId, BipedS* pl_Biped) {
-    if (game_init && plI.plS) {
-        WeaponS* weap = (WeaponS*)pIObject->GetObjectAddress(pl_Biped->sObject.Weapon);
-        if (!weap)
-            return 0;
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-                //pIPlayer->sendCustomMsg(MSG_INFO, 1, pl_null, L"");
-                if (cachePlayer->isZombie && weap && weap->sObject.GameObject==-1)
-                    return 0;
-                else if (cachePlayer->isZombie /*&& weap && weap->sObject.GameObject!=-1*/) {
-                    pIObject->EquipmentAssign(plI.plS->CurrentBiped, oddball_flag_obj[plI.mS->machineIndex]);
-                }
-                break;
-            }
-        }
-    }
-    return 1;
-}
+//RadWolfie - Approved
+CNATIVE dllAPI void WINAPIC EXTOnPlayerUpdate(PlayerInfo plI) {
 
-
-CNATIVE dllAPI bool EXTOnPlayerScoreCTF(IPlayer::PlayerInfo plI, ident cur_weap_id, DWORD team, bool isGameObject) {
-    if (!game_init) return true;  //Default to allow score
-    if (!isGameObject) return false; //If game is initialized, do NOT allow any false game objects to score.
-    /*
-    for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-        if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-            if (cachePlayer->isZombie) {
-                //pIObject->Create(oddball_tag_id->id, parentId, 60, out_objId, &location);
-                //timers[AssignWeaponAfterScore] = addon::pITimer->EXTAddOnTimerAdd(plI, 10);
-            }
-            break;
-        }
-    }*/
-    pIObject->EquipmentAssign(plI.plS->CurrentBiped, oddball_flag_obj[plI.mS->machineIndex]);
-    return true; //Default to allow score IF it is a valid game object.
-}
-//function OnClientUpdate(player)
-CNATIVE dllAPI void WINAPIC EXTOnPlayerUpdate(IPlayer::PlayerInfo plI) {
-    if (!game_init) return;
-
-    if (!(plI.plS && plI.plS->CurrentBiped.Tag!=-1))
+    if (!(plI.plS && plI.plS->CurrentBiped.Tag != -1))
         return;
 
-    BipedS* pl_biped = (BipedS*)pIObject->GetObjectAddress(plI.plS->CurrentBiped);
+    s_biped* pl_biped = (s_biped*)pIObject->m_get_address(plI.plS->CurrentBiped);
     if (!pl_biped)
         return;
+    if (pl_biped->Flashlight && !usedFlashlight[plI.plR->MachineIndex]) {
+        usedFlashlight[plI.plR->MachineIndex] = true;
+        UINT id = pITimer->m_add(EAOHashID, &plI, 90); // 3000 seconds
+        if (id)
+            vTimer.push_back({ id, eHaveSpeedTimer, plI.plR->MachineIndex });
+        plI.plS->VelocityMultiplier = flashlight_speed;
+        //CALL_MEMBER_FN(customMsg, m_value_get, str?_?, msg, section_str_misc);
+        pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, speedburst_begin_message, 0, nullptr);
+    }
+    real_vector3d curCoord = pl_biped->sObject.World;
+    char* map_name = pIHaloEngine->mapCurrent->name;
 
-    std::vector<dataTable>::iterator* cachePlayer = NULL;
-    for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-        if (cachePlayer->uniqueID == plI.mS->UniqueID) {
-            if (pl_biped->Flashlight==8 && *pIHaloEngine->mapUpTimeLive >= cachePlayer->activateFlashlight) {
-                cachePlayer->activateFlashlight = *pIHaloEngine->mapUpTimeLive + 30*3;
-                //TODO: No longer required timer for haveSpeedTimer. #1
-                //registertimer(3000, "haveSpeedTimer", player);
-                plI.plS->VelocityMultiplier= cachePlayer->isZombie?zombie_speed:human_speed;
+    // this makes sure that people won't camp in unreachable places.
+    if (plI.plR->Team == human_team)
+        if (_stricmp(map_name, "bloodgulch") == 0) {
+            if (check_in_sphere(pl_biped->sObject.World, real_vector3d(39.14f, -96.18f, 2.12f), 4)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_tree_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(92.73f, -96.74f, 9.21f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
             }
-            break;
+        } else if (_stricmp(map_name, "damnation") == 0) {
+            if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-2.11f, 12.05f, 7.82f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_glitch_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(5.16f, 15.42f, 8.06f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_glitch_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-1.09f, 13.63f, 7.82f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_glitch_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-7.25f, 12.93f, 5.60f), 1.5)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            }
+        } else if (_stricmp(map_name, "icefields") == 0) {
+            if (check_in_sphere(pl_biped->sObject.World, real_vector3d(18.47f, -6.61f, 6.55f), 2)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(17.17f, -6.64f, 6.61f), 2)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(32.68f, -33.29f, 5.43f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-17.13f, 19.32f, 11.58f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-72.06f, 72.52f, 3.92f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-85.53f, 97.83f, 5.27f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            }
+        } else if (_stricmp(map_name, "sidewinder") == 0) {
+            if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-6.47f, -33.76f, 4.41f), 5)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_glitch_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(4.77f, -33.43f, 4.41f), 5)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_glitch_message, 0, nullptr);
+            }
+        } else if (_stricmp(map_name, "deathisland") == 0) {
+            if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-26.3f, -7.72f, 11.7f), 2)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-25.98f, -6.25f, 11.7f), 2)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(29.73f, 15.29f, 10.47f), 2)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(29.57f, -17.1f, 10.99f), 2)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            }
+        } else if (_stricmp(map_name, "putput") == 0) {
+            if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-4.59f, -20.67f, 3.3f), 1.5)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-2.78f, -20.84f, 3.3f), 1.5)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            }
+        } else if (_stricmp(map_name, "chillout") == 0) {
+            if (check_in_sphere(pl_biped->sObject.World, real_vector3d(11.26f, 8.82f, 3.16f), 2)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            } else if (check_in_sphere(pl_biped->sObject.World, real_vector3d(-7.16f, 7.8f, 4.34f), 3)) {
+                pIObject->m_kill(plI.plS->CurrentBiped);
+                pIPlayer->m_send_custom_message(MF_BLANK, MP_RCON, &plI, block_spot_message, 0, nullptr);
+            }
         }
-    }
-    //TODO: Not really needed for setting the player's score...?
-    // this block of code sets the player's score according to what it should be.
-    /*if tonumber(human_time[name]) {
-        local m_player = getplayer(player)
-        if gametype == "KOTH" {
-            writewordsigned(m_player + 0xC4, human_time[name]*30)
-        } else if ( gametype == "GAMETYPE_CTF" {
-            writedwordsigned(m_player + 0xC8, human_time[name])
-        } else if ( gametype == "Slayer" {
-            writedwordsigned(slayer_globals + 0x40 + player * 4, human_time[name])
-        }
-    else
-        human_time[name] = 0
-    }*/
-    //this makes sure that people won't camp in unreachable places. and doesnt work
-    vect3 curCoord = pl_biped->sObject.World;
-    wchar_t msg[256];
-    if (plI.plA->Team!=zombie_team)
-    if (_stricmp(pIHaloEngine->mapCurrent->mapName, "bloodgulch")==0) {
-        if (object_in_sphere(pl_biped->sObject.World, vect3(39.14f, -96.18f, 2.12f), 4)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_0, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_tree_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(92.73f, -96.74f, 9.21f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        }
-    } else if (_stricmp(pIHaloEngine->mapCurrent->mapName, "damnation")==0) {
-        if (object_in_sphere(pl_biped->sObject.World, vect3(-2.11f, 12.05f, 7.82f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_2, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_glitch_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(5.16f, 15.42f, 8.06f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_2, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_glitch_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(-1.09f, 13.63f, 7.82f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_2, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_glitch_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(-7.25f, 12.93f, 5.60f), 1.5)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        }
-    } else if (_stricmp(pIHaloEngine->mapCurrent->mapName, "icefields")==0) {
-        if (object_in_sphere(pl_biped->sObject.World, vect3(18.47f, -6.61f, 6.55f), 2)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(17.17f, -6.64f, 6.61f), 2)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(32.68f, -33.29f, 5.43f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(-17.13f, 19.32f, 11.58f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(-72.06f, 72.52f, 3.92f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(-85.53f, 97.83f, 5.27f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        }
-    } else if (_stricmp(pIHaloEngine->mapCurrent->mapName, "sidewinder")==0) {
-        if (object_in_sphere(pl_biped->sObject.World, vect3(-6.47f, -33.76f, 4.41f), 5)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_2, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_glitch_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(4.77f, -33.43f, 4.41f), 5)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_2, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_glitch_message.c_str());
-        }
-    } else if (_stricmp(pIHaloEngine->mapCurrent->mapName, "deathisland")==0) {
-        if (object_in_sphere(pl_biped->sObject.World, vect3(-26.3f, -7.72f, 11.7f), 2)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(-25.98f, -6.25f, 11.7f), 2)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(29.73f, 15.29f, 10.47f), 2)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(29.57f, -17.1f, 10.99f), 2)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        }
-    } else if (_stricmp(pIHaloEngine->mapCurrent->mapName, "putput")==0) {
-        if (object_in_sphere(pl_biped->sObject.World, vect3(-4.59f, -20.67f, 3.3f), 1.5)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(-2.78f, -20.84f, 3.3f), 1.5)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        }
-    } else if (_stricmp(pIHaloEngine->mapCurrent->mapName, "chillout")==0) {
-        if (object_in_sphere(pl_biped->sObject.World, vect3(11.26f, 8.82f, 3.16f), 2)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        } else if (object_in_sphere(pl_biped->sObject.World, vect3(-7.16f, 7.8f, 4.34f), 3)) {
-            pIObject->Kill(plI.plS->CurrentBiped);
-            customMsg->ValueGet(str2_1, msg, section_str_misc);
-            pIPlayer->sendCustomMsg(MSG_BLANK, 1, plI, msg);//blocked_spot_message.c_str());
-        }
-    }
 }
 
+//RadWolfie - Extended
 CNATIVE dllAPI void WINAPIC EXTOnMapReset() {
-    if (game_init<1) return;
-
-    //What to add here? Wizard want to destroy the objects, however they're being re-used.
+    map_reset_boolean = true;
 }
-//*/
-/*
-#define invisCrouch             0
-#define HumanTimer              1
-#define NewGameTimer            2
-#define MsgTimer                3
-#define SpeedTimer              4
-#define PlayerChangeTimer       5
-#define RemoveLastmanProtection 6
-#define ForceSwitchEquip        7
-//*/
-inline void invisCrouchFunc() {
-    if (!zombies_invisible_on_crouch && !humans_invisible_on_crouch) {
-        timers[invisCrouch] = -1;
-    }
-        
-    util::dynamicStack<IPlayer::PlayerInfo> plList;
-    pIPlayer->StrToPlayerList(L"*", plList, NULL);
-    for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-        for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-            if (cachePlayer->uniqueID == plI->mS->UniqueID) {
-                BipedS* pl_biped = (BipedS*)pIObject->GetObjectAddress(plI->plS->CurrentBiped);
-                if (pl_biped) {
-                    if (pl_biped->actionBits.crouching) {
-                        if ((cachePlayer->isZombie && zombies_invisible_on_crouch) || (!cachePlayer->isZombie && humans_invisible_on_crouch)) {
-                            pIPlayer->applyCamo(*plI, time_invis);
-                        }
-                    }
-                }
-                break;
-            }
-        }
-    }
-    timers[invisCrouch] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 6); //200 milliseconds
-}
-inline void HumanTimerFunc() {
-    if (map_reset_boolean)
-        map_reset_boolean=false;
-    if (game_init > 1) {
-        util::dynamicStack<IPlayer::PlayerInfo> plList;
-        pIPlayer->StrToPlayerList(L"*", plList, NULL);
-        wchar_t msg[256];
-        for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-            for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-                if (cachePlayer->uniqueID == plI->mS->UniqueID) {
-                    if (!cachePlayer->isZombie) {
-                        cachePlayer->human_time+=1;
-                    }
-                    if (pIHaloEngine->gameTypeLive->GameStage == GAMETYPE_KOTH) {
-                        ObjectS* pl_biped = pIObject->GetObjectAddress(plI->plS->CurrentBiped);
-                        if (pIHaloEngine->gameTypeGlobals->kothGlobal.isInHill[plI->plS->PlayerIndex]) {
-                            if (cachePlayer->inhill_time==-1) {
-                                cachePlayer->inhill_time=0;
-                                pl_biped->unk2=1;
-                                //writebit(m_object + 0x10, 7, 1)//This is written to bipedS.
-                                if (cachePlayer->isZombie) {
-                                    customMsg->ValueGet(str3_1, msg, section_str_misc);
-                                    //pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, koth_in_hill_zombie_message.c_str(), plI->plS->Name);
-                                } else {
-                                    customMsg->ValueGet(str3_0, msg, section_str_misc);
-                                    //pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, koth_in_hill_human_message.c_str(), plI->plS->Name);
-                                }
-                                pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg, plI->plS->Name);
-                            } else if (cachePlayer->inhill_time>=10) {
-                                if (cachePlayer->isZombie) {
-                                    pIHaloEngine->Kill(*plI);
-                                    customMsg->ValueGet(str5_0, msg, section_str_deaths);
-                                    //pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, in_hill_too_long_zombie_msg.c_str(), plI->plS->Name);
-                                } else {
-                                    makezombie(*plI, true);
-                                    customMsg->ValueGet(str6_0, msg, section_str_infected);
-                                    //pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, in_hill_too_long_human_msg.c_str(), plI->plS->Name);
-                                }
-                                pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, msg, plI->plS->Name);
-                                cachePlayer->inhill_time=-1;
-                            } else if (!cachePlayer->isZombie) {
-                                customMsg->ValueGet(str3_2, msg, section_str_misc);
-                                pIPlayer->sendCustomMsg(MSG_BLANK, 1, *plI, msg /*koth_in_hill_human_warn_message.c_str()*/, 10-cachePlayer->inhill_time);
-                                cachePlayer->inhill_time+=1;
-                            } else
-                                cachePlayer->inhill_time+=1;
-                        } else if (pl_biped) {
-                            cachePlayer->inhill_time=-1;
-                            pl_biped->unk2=0;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        timers[HumanTimer] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 30);
-    }
-}
-inline void NewGameTimerFunc() {
-    game_init = 0;    //Just to be sure...
-    if (pIHaloEngine->globalServer->totalPlayers>1) {
-        int newgame_zombie_count = 0;
-        // by default make all players human
-        util::dynamicStack<IPlayer::PlayerInfo> plList;
-        pIPlayer->StrToPlayerList(L"*", plList, NULL);
-        for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-            bool isNotListed=1;
-            for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-                if (cachePlayer->uniqueID == plI->mS->UniqueID) {
-                    if (cachePlayer->isZombie || plI->plS->Team == zombie_team) {
-                        pIPlayer->changeTeam(*plI, human_team, true);
-                    }
-                    isNotListed=0;
-                    break;
-                }
-            }
-            if (isNotListed && plI->plS->Team==zombie_team)
-                pIPlayer->changeTeam(*plI, human_team, true);
-        }
-        game_init = 1;
-        cacheTable.clear();
-        for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-            validatePlayers(*plI);
-        }
-        int possible_count = pIHaloEngine->globalServer->totalPlayers;
-        zombie_count = 0;
-        // make last man zombie
-        int last_man_unique = -1;
-        // check if the last man is to be made a zombie
-        // if so find who was last man
-        if (last_man_next_zombie == true && pIHaloEngine->globalServer->totalPlayers > 1 && cur_last_man.mS) {
-            last_man_unique = cur_last_man.mS->UniqueID;
-            makezombie(cur_last_man, true);
-            newgame_zombie_count = 1;
-        }
-        // reset last man
-        cur_last_man = IPlayer::PlayerInfo();
-        /*if (finalZombies == pIHaloEngine->globalServer->totalPlayers) { // if 0 players they will be human
-            finalZombies -= 1;
-        } else if (finalZombies > possible_count) { // fix the count
-            finalZombies = possible_count;
-        } else if (max_zombie_count && finalZombies > max_zombie_count) { // cap the zombie count
-            finalZombies = max_zombie_count;
-        } else if ( finalZombies < 0) {
-            finalZombies = 0;
-        }*/
-            
-        // loop through the players, randomly selecting ones to become
-        // zombies
-        //while (newgame_zombie_count) {
-        if (!newgame_zombie_count) {
-            // randomly choose a player
-            redrawPlayer:
-            IPlayer::PlayerInfo newzomb = ChooseRandomPlayer(zombie_team);
-            if ( newzomb.mS->UniqueID != last_man_unique ) {
-                makezombie(newzomb, true);
-                newgame_zombie_count += 1;
-            } else
-                goto redrawPlayer;
-        }
-        // fix the team counters
-        cur_zombie_count = newgame_zombie_count;
-        cur_human_count = pIHaloEngine->globalServer->totalPlayers - newgame_zombie_count;
-        // reset the map
-        for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-            EXTOnPlayerSpawnColor(*plI, pIHaloEngine->gameTypeLive->isTeamPlay);
-        }
-        char i = 0;
-        do {
-            ident out_objId;
-            ident parentId;
-            pIObject->Create(oddball_tag_id->id,parentId, 0, oddball_flag_obj[i], &location);
-            i++;
-        } while(i<16);
-        //((h_tag_weap*)(oddball_tag_id->metaData1))->must_be_readied=0;
-        //((h_tag_weap*)(oddball_tag_id->metaData1))->prevent_melee_attack=1;
-        //((h_tag_weap*)(flag_tag_id->metaData1))->must_be_readied=0;
-        pIHaloEngine->Exec("sv_map_reset");
-        pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, L"The game has started!");
-        wchar_t msg[256];
-        for(util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-            for(std::vector<dataTable>::iterator cachePlayer = cacheTable.begin(); cachePlayer < cacheTable.end(); cachePlayer++) {
-                if (cachePlayer->uniqueID == plI->mS->UniqueID) {
-                    // check if they're a zombie
-                    if (cachePlayer->isZombie)
-                        customMsg->ValueGet(str1_8, msg, section_str_misc);
-                        //pIPlayer->sendCustomMsg(MSG_BLANK, 1, *plI, zombie_message.c_str());
-                    else
-                        customMsg->ValueGet(str1_7, msg, section_str_misc);
-                        //pIPlayer->sendCustomMsg(MSG_BLANK, 1, *plI, human_message.c_str());
-                    pIPlayer->sendCustomMsg(MSG_BLANK, 1, *plI, msg);
-                    break;
-                }
-            }
-                
-        }
-        timers[NewGameTimer]=-1;
-        game_init = 2;
-        if (timers[HumanTimer]==-1)
-            timers[HumanTimer] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 30);
 
-        if (timers[invisCrouch]==-1)
-            timers[invisCrouch] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 6); //6 = 200 miliseconds
-
-        if (timers[SpeedTimer]==-1)
-            timers[SpeedTimer] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 90); // 3 seconds
-        checkgamestate(pl_null);
+//RadWolfie - Extended
+CNATIVE dllAPI bool WINAPIC EXTOnPlayerSpawnColor(PlayerInfo plI, bool isTeamPlay) {
+    if (plI.plR->Team == zombie_team) {
+        plI.plR->ColorIndex = zombie_color;
+        plI.plS->ColorIndex = zombie_color;
     } else {
-        timers[NewGameTimer] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 225);    //7.5 seconds
+        plI.plR->ColorIndex = human_color;
+        plI.plS->ColorIndex = human_color;
     }
-    //resptime = 0;
-}
-inline void MsgTimerFunc() {
-    
-        /*
-bool MsgTimer(id, count, player) {
-    if getplayer(player) then
-        privatesay(player, welcome_message)
-        if gametype == "KOTH" then
-            privatesay(player, koth_additional_welcome_msg)
-        } else if ( gametype == "Slayer" then
-            --local msg = tokenizestring(slayer_additional_welcome_msg, "\n")
-            --privatesay(player, msg[1])
-            --privatesay(player, msg[2])
-        end
-    end
-    return false;
-    */
-}
-inline void SpeedTimerFunc() {
-    util::dynamicStack<IPlayer::PlayerInfo> plList;
-    pIPlayer->StrToPlayerList(L"*", plList, NULL);
-    for (util::dynamicStack<IPlayer::PlayerInfo>::iterator plI = plList.begin(); plI != NULL; plI++) {
-        if (plI->plS) {
-            float speed = plI->plS->VelocityMultiplier;
-            if (plI->plA->Team==zombie_team && speed < zombie_speed) {
-                plI->plS->VelocityMultiplier=zombie_speed;
-            } else if (plI->plS == cur_last_man.plS && speed < lastman_speed) {
-                plI->plS->VelocityMultiplier=lastman_speed;
-            } else {
-                plI->plS->VelocityMultiplier=human_speed;
-            }
-        }
-    }
-    timers[SpeedTimer] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 30);
-}
-inline void PlayerChangeTimerFunc() {
-    if (playerChangeCounter>0 && pIHaloEngine->gameTypeLive->isTeamPlay) {
-        if (!allow_change || cur_zombie_count > 0) {
-            allow_change=false;
-            pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, L"Thank you, the game can continue.");
-            timers[PlayerChangeTimer]=-1;
-        } else
-            pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, L"In %d seconds a player will be forced to become a zombie.", 6 - playerChangeCounter);
-    } else { //timer up, force team change
-        allow_change=false;
-        // pick a human and make them zombie.
-        IPlayer::PlayerInfo newZomb = ChooseRandomPlayer(zombie_team);
-        if (newZomb.plS) {
-            makezombie(newZomb, true);
-        } else
-            pIPlayer->sendCustomMsgBroadcast(MSG_BLANK, L"PlayerChangeTimer got null");
-        timers[PlayerChangeTimer]=-1;
-    }
-    if (timers[PlayerChangeTimer]!=-1) {
-        timers[PlayerChangeTimer] = addon::pITimer->EXTAddOnTimerAdd(pl_null, 30);
-        playerChangeCounter-=1;
-    } else
-        playerChangeCounter=0;
-}
-inline void RemoveLastmanProtectionFunc() {
-    //writebit(m_object + 0x10, 7, 0)
-}
-
-CNATIVE dllAPI void WINAPIC EXTOnTimerCancel(DWORD idTimer) {
-    if (timers[invisCrouch]=idTimer)
-        timers[invisCrouch]=-1;
-    else if (timers[HumanTimer]=idTimer)
-        timers[HumanTimer]=-1;
-    else if (timers[NewGameTimer]=idTimer)
-        timers[NewGameTimer]=-1;
-    else if (timers[MsgTimer]=idTimer)
-        timers[MsgTimer]=-1;
-    else if (timers[SpeedTimer]=idTimer)
-        timers[SpeedTimer]=-1;
-    else if (timers[PlayerChangeTimer]=idTimer)
-        timers[PlayerChangeTimer]=-1;
-    else if (timers[RemoveLastmanProtection]=idTimer)
-        timers[RemoveLastmanProtection]=-1;
-}
-CNATIVE dllAPI void WINAPIC EXTOnTimerExecute(DWORD idTimer) {
-    if (timers[NewGameTimer]==idTimer)
-            NewGameTimerFunc();
-    else if (game_init>0) {
-        if (timers[invisCrouch]==idTimer)
-            invisCrouchFunc();
-        else if (timers[HumanTimer]==idTimer)
-            HumanTimerFunc();
-        else if (timers[MsgTimer]==idTimer)
-            MsgTimerFunc();
-        else if (timers[SpeedTimer]==idTimer)
-            SpeedTimerFunc();
-        else if (timers[PlayerChangeTimer]==idTimer)
-            PlayerChangeTimerFunc();
-        else if (timers[RemoveLastmanProtection]==idTimer)
-            RemoveLastmanProtectionFunc();
-        
-    } else
-        EXTOnTimerCancel(idTimer);
-}
-
-//Commands Section Begin
-static const wchar_t eao_infection_enable_str[] = L"eao_gametype_infection_enable";
-toggle eaoGametypeInfectionEnable(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    wchar_t msg[3][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_0, msg[0], section_str_general);
-    } else {
-        toggle setInfectionEnable = util::StrToBooleanW(arg[1]);
-        if (setInfectionEnable==-1) {
-            return CMDFAIL;
-        } else if (setInfectionEnable==1 && game_enable==0) {
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-            game_enable=1;
-            if (pIHaloEngine->mapCurrent->cam_multi_menu==1) {
-                Init();
-            }
-        } else if (setInfectionEnable==0 && game_enable==1) {
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-            game_enable=0;
-            Uninit();
-        } else {
-            customMsg->ValueGet(str2_2, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_2, msg[1], section_str_general);
-    customMsg->ValueGet((game_enable?str1_1:str1_0), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-
-static const wchar_t eao_infection_zombie_team_str[] = L"eao_gametype_infection_zombie_team";
-toggle eaoGametypeInfectionZombieTeam(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    toggle setZombieTeam = util::StrToTeamW(arg[1]);
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_3, msg[0], section_str_general);
-    } else if (setZombieTeam==-1) {
-        return CMDFAIL;
-    } else {
-        if (setZombieTeam==zombie_team) {
-            customMsg->ValueGet(str2_4, msg[0], section_str_general);
-        } else {
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-            join_team = zombie_team = setZombieTeam;
-            human_team = !zombie_team;
-        }
-    }
-    customMsg->ValueGet(str1_5, msg[1], section_str_general);
-    customMsg->ValueGet((zombie_team?str1_4:str1_3), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-
-static const wchar_t eao_infection_zombie_respawn_str[] = L"eao_gametype_infection_zombie_respawn";
-toggle eaoGametypeInfectionZombieRespawn(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    if (!util::isnumberW(arg[1]))
-        return CMDFAIL;
-    wchar_t msg[2][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_5, msg[0], section_str_general);
-    } else {
-        int setZombieRespawn=_wtoi(arg[1]);
-        if (setZombieRespawn<0)
-            return CMDFAIL;
-        if (zombie_spawn_time==setZombieRespawn) {
-            customMsg->ValueGet(str2_7, msg[0], section_str_general);
-        } else {
-            zombie_spawn_time = setZombieRespawn;
-            customMsg->ValueGet(str2_6, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_5, msg[1], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], zombie_spawn_time);
-    return CMDSUCC;
-}
-static const wchar_t eao_infection_human_respawn_str[] = L"eao_gametype_infection_human_respawn";
-toggle eaoGametypeInfectionHumanRespawn(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[2][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_5, msg[0], section_str_general);
-    } else {
-        if (!util::isnumberW(arg[1]))
-            return CMDFAIL;
-        int setHumanRespawn=_wtoi(arg[1]);
-        if (setHumanRespawn<0)
-            return CMDFAIL;
-        if (human_spawn_time==setHumanRespawn) {
-            customMsg->ValueGet(str2_7, msg[0], section_str_general);
-        } else {
-            human_spawn_time = setHumanRespawn;
-            customMsg->ValueGet(str2_6, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_6, msg[1], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], human_spawn_time);
-    return CMDSUCC;
-}
-
-static const wchar_t eao_infection_zombie_speed_str[] = L"eao_gametype_infection_zombie_speed";
-toggle eaoGametypeInfectionZombieSpeed(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    if (!util::isfloatW(arg[1]))
-        return CMDFAIL;
-    float setZombieSpeed=(float)_wtof(arg[1]);
-    wchar_t msg[2][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_8, msg[0], section_str_general);
-    } else {
-        if (zombie_speed==setZombieSpeed) {
-            customMsg->ValueGet(str2_10, msg[0], section_str_general);
-        } else {
-            zombie_speed = setZombieSpeed;
-            customMsg->ValueGet(str2_9, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_5, msg[1], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], zombie_speed);
-    return CMDSUCC;
-}
-static const wchar_t eao_infection_human_speed_str[] = L"eao_gametype_infection_human_speed";
-toggle eaoGametypeInfectionHumanSpeed(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    if (!util::isfloatW(arg[1]))
-        return CMDFAIL;
-    float setHumanSpeed=(float)_wtof(arg[1]);
-    wchar_t msg[2][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_8, msg[0], section_str_general);
-    } else {
-        if (human_speed==setHumanSpeed) {
-            customMsg->ValueGet(str2_10, msg[0], section_str_general);
-        } else {
-            human_speed = setHumanSpeed;
-            customMsg->ValueGet(str2_9, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_6, msg[1], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], human_speed);
-    return CMDSUCC;
-}
-static const wchar_t eao_infection_last_man_speed_str[] = L"eao_gametype_infection_last_man_speed";
-toggle eaoGametypeInfectionLastManSpeed(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    if (!util::isfloatW(arg[1]))
-        return CMDFAIL;
-    float setLastManSpeed=(float)_wtof(arg[1]);
-    wchar_t msg[2][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_8, msg[0], section_str_general);
-    } else {
-        if (lastman_speed==setLastManSpeed) {
-            customMsg->ValueGet(str2_10, msg[0], section_str_general);
-        } else {
-            lastman_speed = setLastManSpeed;
-            customMsg->ValueGet(str2_9, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_7, msg[1], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], lastman_speed);
-    return CMDSUCC;
-}
-
-static const wchar_t eao_infection_last_man_next_zombie_str[] = L"eao_gametype_infection_last_man_next_zombie";
-toggle eaoGametypeInfectionLastManNextZombie(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_0, msg[0], section_str_general);
-    } else {
-        toggle setLastManNextZombie=util::StrToBooleanW(arg[1]);
-        if (setLastManNextZombie==-1) {
-            return CMDFAIL;
-        } else if (last_man_next_zombie==(setLastManNextZombie!=0)) {
-            customMsg->ValueGet(str2_2, msg[0], section_str_general);
-        } else {
-            last_man_next_zombie = (setLastManNextZombie!=0);
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_7, msg[1], section_str_general);
-    customMsg->ValueGet((last_man_next_zombie?str1_1:str1_0), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-
-static const wchar_t eao_infection_zombie_allow_in_vehicle_str[] = L"eao_gametype_infection_zombie_allow_in_vehicle";
-toggle eaoGametypeInfectionZombieAllowInVehicle(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_11, msg[0], section_str_general);
-    } else {
-        toggle setZombieAllowInVehicle=util::StrToBooleanW(arg[1]);
-        if (setZombieAllowInVehicle==-1) {
-            return CMDFAIL;
-        } else if (zombies_allowed_in_vehis==(setZombieAllowInVehicle!=0)) {
-            customMsg->ValueGet(str2_13, msg[0], section_str_general);
-        } else {
-            zombies_allowed_in_vehis = (setZombieAllowInVehicle!=0);
-            customMsg->ValueGet(str2_12, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_5, msg[1], section_str_general);
-    customMsg->ValueGet((zombies_allowed_in_vehis?str1_9:str1_8), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-static const wchar_t eao_infection_human_allow_in_vehicle_str[] = L"eao_gametype_infection_human_allow_in_vehicle";
-toggle eaoGametypeInfectionHumanAllowInVehicle(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_11, msg[0], section_str_general);
-    } else {
-        toggle setHumanAllowInVehicle=util::StrToBooleanW(arg[1]);
-        if (setHumanAllowInVehicle==-1) {
-            return CMDFAIL;
-        } else if (humans_allowed_in_vehis==(setHumanAllowInVehicle!=0)) {
-            customMsg->ValueGet(str2_13, msg[0], section_str_general);
-        } else {
-            humans_allowed_in_vehis = (setHumanAllowInVehicle!=0);
-            customMsg->ValueGet(str2_12, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_6, msg[1], section_str_general);
-    customMsg->ValueGet((humans_allowed_in_vehis?str1_9:str1_8), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-
-
-static const wchar_t eao_infection_infect_on_fall_str[] = L"eao_gametype_infection_infect_on_fall";
-toggle eaoGametypeInfectionInfectOnFall(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_0, msg[0], section_str_general);
-    } else {
-        toggle setInfectOnFall=util::StrToBooleanW(arg[1]);
-        if (setInfectOnFall==-1) {
-            return CMDFAIL;
-        } else if (infect_on_fall==(setInfectOnFall!=0)) {
-            customMsg->ValueGet(str2_2, msg[0], section_str_general);
-        } else {
-            infect_on_fall = (setInfectOnFall!=0);
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_10, msg[1], section_str_general);
-    customMsg->ValueGet((infect_on_fall?str1_1:str1_0), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-static const wchar_t eao_infection_infect_on_guardians_str[] = L"eao_gametype_infection_infect_on_guardians";
-toggle eaoGametypeInfectionInfectOnGuardians(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_0, msg[0], section_str_general);
-    } else {
-        toggle setInfectOnGuardians=util::StrToBooleanW(arg[1]);
-        if (setInfectOnGuardians==-1) {
-            return CMDFAIL;
-        } else if (infect_on_guardians==(setInfectOnGuardians!=0)) {
-            customMsg->ValueGet(str2_2, msg[0], section_str_general);
-        } else {
-            infect_on_guardians = (setInfectOnGuardians!=0);
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_11, msg[1], section_str_general);
-    customMsg->ValueGet((infect_on_guardians?str1_1:str1_0), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-static const wchar_t eao_infection_infect_on_suicide_str[] = L"eao_gametype_infection_infect_on_suicide";
-toggle eaoGametypeInfectionInfectOnSuicide(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_0, msg[0], section_str_general);
-    } else {
-        toggle setInfectOnSuicide=util::StrToBooleanW(arg[1]);
-        if (setInfectOnSuicide==-1) {
-            return CMDFAIL;
-        } else if (infect_on_suicide==(setInfectOnSuicide!=0)) {
-            customMsg->ValueGet(str2_2, msg[0], section_str_general);
-        } else {
-            infect_on_suicide = (setInfectOnSuicide!=0);
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_12, msg[1], section_str_general);
-    customMsg->ValueGet((infect_on_suicide?str1_1:str1_0), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-static const wchar_t eao_infection_infect_on_betrayal_str[] = L"eao_gametype_infection_infect_on_betrayal";
-toggle eaoGametypeInfectionInfectOnBetrayal(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    if (arg.argc==1) {
-        customMsg->ValueGet(str2_0, msg[0], section_str_general);
-    } else {
-        toggle setInfectOnBetrayal=util::StrToBooleanW(arg[1]);
-        if (setInfectOnBetrayal==-1) {
-            return CMDFAIL;
-        } else if (infect_on_betrayal==(setInfectOnBetrayal!=0)) {
-            customMsg->ValueGet(str2_2, msg[0], section_str_general);
-        } else {
-            infect_on_betrayal = (setInfectOnBetrayal!=0);
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_13, msg[1], section_str_general);
-    customMsg->ValueGet((infect_on_betrayal?str1_1:str1_0), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-
-static const wchar_t eao_infection_zombie_invisible_on_crouch_str[] = L"eao_gametype_infection_zombie_invisible_on_crouch";
-toggle eaoGametypeInfectionZombieInvisibleOnCrouch(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    if (game_init>0) {
-        return CMDFAIL;
-    }
-    wchar_t msg[3][256];
-    if (arg.argc == 1) {
-        customMsg->ValueGet(str2_0, msg[0], section_str_general);
-    } else {
-        toggle setZombieInvisibleOnCrouch=util::StrToBooleanW(arg[1]);
-        if (setZombieInvisibleOnCrouch==-1) {
-            return CMDFAIL;
-        } else if (zombies_invisible_on_crouch==(setZombieInvisibleOnCrouch!=0)) {
-            customMsg->ValueGet(str2_2, msg[0], section_str_general);
-        } else {
-            zombies_invisible_on_crouch = (setZombieInvisibleOnCrouch!=0);
-            customMsg->ValueGet(str2_1, msg[0], section_str_general);
-        }
-    }
-    customMsg->ValueGet(str1_14, msg[1], section_str_general);
-    customMsg->ValueGet((zombies_invisible_on_crouch?str1_1:str1_0), msg[2], section_str_general);
-    pIPlayer->sendCustomMsg(MSG_BLANK, chatRconRemote, plI, msg[0], msg[1], msg[2]);
-    return CMDSUCC;
-}
-//Commands Section End
-
-static addon::addonInfo eaoInfo = { L"Infection GameType Add-on", L"1.0.0.0",
-                            L"RadWolfie & Wizard",
-                            L"It provide ability simulate a zombie gametype with almost any proper gametype.",
-                            L"Infection Gametype",
-                            L"gametype",
-                            NULL,
-                            NULL,
-                            NULL,
-                            NULL};
-
-
-CNATIVE dllAPI addon::addonInfo* EXTPluginInfo = &eaoInfo;
-
-CNATIVE dllAPI toggle WINAPIC EXTOnEAOLoad() {
-    if (pIHaloEngine->haloGameVersion==HALO_TRIAL) //Does not support Halo Trial due to sv_map_reset is not featured in Trial version.
-        return EAOFAIL;
-    srand (time_t()); //NOTICE: THIS IS REQUIRED FOR RAND FUNCTION TO WORK!
-    cacheTable.resize(32);
-    cacheTable.clear();
-    cur_zombie_count = 0;
-    cur_human_count = 0;
-    alpha_zombie_count = 0;
-    timers[6]=timers[5]=timers[4]=timers[3]=timers[2]=timers[1]=timers[0]=-1;  // { -1 } does not do as expected! Curse you MVS!
-    cur_last_man = IPlayer::PlayerInfo();
-    game_init = 0;
-    game_enable = false;
-    allow_change = false;
-    velocity_reset.z=velocity_reset.y=velocity_reset.x=0;
-    pl_null = IPlayer::PlayerInfo();
-    pICommand->ReloadLevel();
-    customMsg = getICIniFile();
-    if (!customMsg)
-        return EAOFAIL;
-    if (!customMsg->Open(customMsgStr)) {
-        if (customMsg->Create(customMsgStr))
-            if (customMsg->Open(customMsgStr))
-                goto successInitCustomMsg;
-        customMsg->Release();
-        return EAOFAIL;
-    }
-    successInitCustomMsg:
-    customMsg->Load();
-    //Death section, 1.x = player "fall" deaths
-    if (!customMsg->ValueExist(str1_0, section_str_deaths))
-        customMsg->ValueSet(str1_0, L"%s fell to his death...", section_str_deaths);
-    if (!customMsg->ValueExist(str1_1,section_str_deaths))
-        customMsg->ValueSet(str1_1, L"%s slipped and fell...", section_str_deaths);
-
-    //Death section, 2.x = player's suicide notes (does not get to be infected.)
-    if (!customMsg->ValueExist(str2_0, section_str_deaths))
-        customMsg->ValueSet(str2_0, L"%s made mistakes...", section_str_deaths);
-   // if (!customMsg->ValueExist(str1_, section_str_deaths))
-   //     customMsg->ValueSet(str1_, , section_str_deaths);
-
-    //Death section, 3.x = player betrayal
-    if (!customMsg->ValueExist(str3_0, section_str_deaths))
-        customMsg->ValueSet(str3_0, L"%s was infected for betraying %s", section_str_deaths);
-
-    //Death section, 4.x = player kills
-    if (!customMsg->ValueExist(str4_0, section_str_deaths))
-        customMsg->ValueSet(str4_0, L"%s has killed %s", section_str_deaths);
-
-    //Death section, 5.x = zombie stayed in hill too long (KOTH gametype mixture)
-    if (!customMsg->ValueExist(str5_0, section_str_deaths))
-        customMsg->ValueSet(str5_0, L"%s has been killed because they were in the hill too long!", section_str_deaths);
-
-
-    //Infected section, 1.x = zombie infecting players
-    if (!customMsg->ValueExist(str1_0, section_str_infected))
-        customMsg->ValueSet(str1_0, L"%s has infected %s", section_str_infected);
-
-    //Infected section, 2.x = player's sucicide notes (does get to be infected.)
-    if (!customMsg->ValueExist(str2_0, section_str_infected))
-        customMsg->ValueSet(str2_0, L"%s lost the will to live...", section_str_infected);
-
-    //Infected section, 3.x = player betrayal
-    if (!customMsg->ValueExist(str3_0, section_str_infected))
-        customMsg->ValueSet(str3_0, L"%s was infected for betraying %s", section_str_infected);
-
-    //Infected section, 4.x = ai kills (aka guardian kills)
-    if (!customMsg->ValueExist(str4_0, section_str_infected))
-        customMsg->ValueSet(str4_0, L"%s was infected by an angry ghost!", section_str_infected);
-
-    //Infected section, 5.x = complement backtap messages
-    if (!customMsg->ValueExist(str5_0, section_str_infected))
-        customMsg->ValueSet(str5_0, L"Nice backtap!", section_str_infected);
-
-    //Infected section, 6.x = player stayed in hill too long (KOTH gametype mixture)
-    if (!customMsg->ValueExist(str6_0, section_str_infected))
-        customMsg->ValueSet(str6_0, L"%s was infected because they were in the hill too long!", section_str_infected);
-
-    //Misc section, 1.x = Info messages
-    if (!customMsg->ValueExist(str1_0, section_str_misc))
-        customMsg->ValueSet(str1_0, L"Autobalance: You're not allowed to change team.", section_str_misc);
-    if (!customMsg->ValueExist(str1_1, section_str_misc))
-        customMsg->ValueSet(str1_1, L"Don't team kill...", section_str_misc);
-    if (!customMsg->ValueExist(str1_2, section_str_misc))
-        customMsg->ValueSet(str1_2, L"There are no zombies left. Someone needs to change team or be forced to.", section_str_misc);
-    if (!customMsg->ValueExist(str1_3, section_str_misc))
-        customMsg->ValueSet(str1_3, L"%s is the last human alive and is invisible for %d seconds!", section_str_misc);
-    if (!customMsg->ValueExist(str1_4, section_str_misc))
-        customMsg->ValueSet(str1_4, L"Please don't leave and rejoin. You've been put back onto your last team.", section_str_misc);
-    if (!customMsg->ValueExist(str1_5, section_str_misc))
-        customMsg->ValueSet(str1_5, L"The zombies are invisible for 30 seconds!", section_str_misc);
-    if (!customMsg->ValueExist(str1_6, section_str_misc))
-        customMsg->ValueSet(str1_6, L"Thank you. The game will now continue", section_str_misc);
-    if (!customMsg->ValueExist(str1_7, section_str_misc))
-        customMsg->ValueSet(str1_7, L"YOU'RE A HUMAN. Survive!", section_str_misc);
-    if (!customMsg->ValueExist(str1_8, section_str_misc))
-        customMsg->ValueSet(str1_8, L"YOU'RE A ZOMBIE. FEED ON HUMANS!", section_str_misc);
-    if (!customMsg->ValueExist(str1_9, section_str_misc))
-        customMsg->ValueSet(str1_9, L"%s is now a human because they infected 5 times!", section_str_misc);
-
-    //Misc section, 2.x = Blocked message
-    if (!customMsg->ValueExist(str2_0, section_str_misc))
-        customMsg->ValueSet(str2_0, L"This tree is blocked.", section_str_misc);
-    if (!customMsg->ValueExist(str2_1, section_str_misc))
-        customMsg->ValueSet(str2_1, L"Sorry this spot has been blocked...", section_str_misc);
-    if (!customMsg->ValueExist(str2_2, section_str_misc))
-        customMsg->ValueSet(str2_2, L"Glitching is not allowed!", section_str_misc);
-
-    //Misc section, 3,x = KOTH message
-    if (!customMsg->ValueExist(str3_0, section_str_misc))
-        customMsg->ValueSet(str3_0, L"%s must leave the hill in 10 seconds or they will be infected!", section_str_misc);
-    if (!customMsg->ValueExist(str3_1, section_str_misc))
-        customMsg->ValueSet(str3_1, L"%s must leave the hill in 10 seconds or they will be killed!", section_str_misc);
-    if (!customMsg->ValueExist(str3_2, section_str_misc))
-        customMsg->ValueSet(str3_2, L"You have %d seconds to leave the hill!", section_str_misc);
-    //if (!customMsg->ValueExist(str3_, section_str_misc))
-    //    customMsg->ValueSet(str3_, , section_str_misc);
-
-    //Welcome section, 1.x = Variety messages (randomly chosen)
-    if (!customMsg->ValueExist(str1_0, section_str_welcome))
-        customMsg->ValueSet(str1_0, L"Welcome to Ash Clan Zombies", section_str_welcome);
-
-    //Welcome section, 2.x = Variety gametype messages
-    if (!customMsg->ValueExist(str2_0, section_str_welcome))
-        customMsg->ValueSet(str2_0, L"The hill is a safezone! Use it for quick getaways!", section_str_welcome);
-
-    //General section, 1.x = Variety messages for the commands section
-    if (!customMsg->ValueExist(str1_0, section_str_general))
-        customMsg->ValueSet(str1_0, L"disable", section_str_general);
-    if (!customMsg->ValueExist(str1_1, section_str_general))
-        customMsg->ValueSet(str1_1, L"enable", section_str_general);
-    if (!customMsg->ValueExist(str1_2, section_str_general))
-        customMsg->ValueSet(str1_2, L"Infection gametype", section_str_general);
-    if (!customMsg->ValueExist(str1_3, section_str_general))
-        customMsg->ValueSet(str1_3, L"red team", section_str_general);
-    if (!customMsg->ValueExist(str1_4, section_str_general))
-        customMsg->ValueSet(str1_4, L"blue team", section_str_general);
-    if (!customMsg->ValueExist(str1_5, section_str_general))
-        customMsg->ValueSet(str1_5, L"Zombie", section_str_general);
-    if (!customMsg->ValueExist(str1_6, section_str_general))
-        customMsg->ValueSet(str1_6, L"Human", section_str_general);
-    if (!customMsg->ValueExist(str1_7, section_str_general))
-        customMsg->ValueSet(str1_7, L"Last man", section_str_general);
-    if (!customMsg->ValueExist(str1_8, section_str_general))
-        customMsg->ValueSet(str1_8, L"forbidden", section_str_general);
-    if (!customMsg->ValueExist(str1_9, section_str_general))
-        customMsg->ValueSet(str1_9, L"permitted", section_str_general);
-    if (!customMsg->ValueExist(str1_10, section_str_general))
-        customMsg->ValueSet(str1_10, L"Infect by fall", section_str_general);
-    if (!customMsg->ValueExist(str1_11, section_str_general))
-        customMsg->ValueSet(str1_11, L"Infect by guardian", section_str_general);
-    if (!customMsg->ValueExist(str1_12, section_str_general))
-        customMsg->ValueSet(str1_12, L"Infect by suicide", section_str_general);
-    if (!customMsg->ValueExist(str1_13, section_str_general))
-        customMsg->ValueSet(str1_13, L"Infect by betrayal", section_str_general);
-    if (!customMsg->ValueExist(str1_14, section_str_general))
-        customMsg->ValueSet(str1_14, L"Invisible zombie crouching", section_str_general);
-
-    /*if (!customMsg->ValueExist(str1_, section_str_general))
-        customMsg->ValueSet(str1_, , section_str_general);*/
-
-    //Commands section, 2.x = Variety messages combo
-    if (!customMsg->ValueExist(str2_0, section_str_general))
-        customMsg->ValueSet(str2_0, L"%s is currently %s.", section_str_general);
-    if (!customMsg->ValueExist(str2_1, section_str_general))
-        customMsg->ValueSet(str2_1, L"%s is now set to %s.", section_str_general);
-    if (!customMsg->ValueExist(str2_2, section_str_general))
-        customMsg->ValueSet(str2_2, L"%s is already %s.", section_str_general);
-    if (!customMsg->ValueExist(str2_3, section_str_general))
-        customMsg->ValueSet(str2_3, L"%s is currently on %s.", section_str_general);
-    if (!customMsg->ValueExist(str2_4, section_str_general))
-        customMsg->ValueSet(str2_4, L"%s is already on %s.", section_str_general);
-    if (!customMsg->ValueExist(str2_5, section_str_general))
-        customMsg->ValueSet(str2_5, L"%s is currently at %d second(s).", section_str_general);
-    if (!customMsg->ValueExist(str2_6, section_str_general))
-        customMsg->ValueSet(str2_6, L"%s is now set to %d second(s).", section_str_general);
-    if (!customMsg->ValueExist(str2_7, section_str_general))
-        customMsg->ValueSet(str2_7, L"%s is already set to %d second(s).", section_str_general);
-    if (!customMsg->ValueExist(str2_8, section_str_general))
-        customMsg->ValueSet(str2_8, L"%s is currently at x%f speed.", section_str_general);
-    if (!customMsg->ValueExist(str2_9, section_str_general))
-        customMsg->ValueSet(str2_9, L"%s is now set to x%f speed.", section_str_general);
-    if (!customMsg->ValueExist(str2_10, section_str_general))
-        customMsg->ValueSet(str2_10, L"%s is already set to x%f speed.", section_str_general);
-    if (!customMsg->ValueExist(str2_11, section_str_general))
-        customMsg->ValueSet(str2_11, L"%s team are currently %s to enter the vehicle.", section_str_general);
-    if (!customMsg->ValueExist(str2_12, section_str_general))
-        customMsg->ValueSet(str2_12, L"%s team are set %s to enter the vehicle.", section_str_general);
-    if (!customMsg->ValueExist(str2_13, section_str_general))
-        customMsg->ValueSet(str2_13, L"%s team are already set %s to enter the vehicle.", section_str_general);
-    /*if (!customMsg->ValueExist(str2_, section_str_general))
-        customMsg->ValueSet(str2_, , section_str_general);*/
-    /*if (!customMsg->ValueExist(str1_, ))
-        customMsg->ValueSet(str1_, , );
-    if (!customMsg->ValueExist(str1_, ))
-        customMsg->ValueSet(str1_, , );*/
-    customMsg->Save();
-    customMsg->Close();
-
-    pICommand->Add(eao_infection_enable_str, eaoGametypeInfectionEnable, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_zombie_team_str, eaoGametypeInfectionZombieTeam, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_zombie_respawn_str, eaoGametypeInfectionZombieRespawn, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_human_respawn_str, eaoGametypeInfectionHumanRespawn, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_zombie_speed_str, eaoGametypeInfectionZombieSpeed, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_human_speed_str, eaoGametypeInfectionHumanSpeed, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_last_man_speed_str, eaoGametypeInfectionLastManSpeed, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_last_man_next_zombie_str, eaoGametypeInfectionLastManNextZombie, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_zombie_allow_in_vehicle_str, eaoGametypeInfectionZombieAllowInVehicle, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_human_allow_in_vehicle_str, eaoGametypeInfectionHumanAllowInVehicle, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_infect_on_fall_str, eaoGametypeInfectionInfectOnFall, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_infect_on_guardians_str, eaoGametypeInfectionInfectOnGuardians, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_infect_on_suicide_str, eaoGametypeInfectionInfectOnSuicide, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_infect_on_betrayal_str, eaoGametypeInfectionInfectOnBetrayal, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-    pICommand->Add(eao_infection_zombie_invisible_on_crouch_str, eaoGametypeInfectionZombieInvisibleOnCrouch, eaoInfo.sectors.sect_name1, 1, 2, false, util::modeAll);
-
-    haloOutput(0, "Infection GameType support added.");
-    return EAOCONTINUE;
-}
-CNATIVE dllAPI void WINAPIC EXTOnEAOUnload() {
-    Uninit();
-    customMsg->Release();
-    
-    pICommand->Del(eaoGametypeInfectionEnable, eao_infection_enable_str);
-    pICommand->Del(eaoGametypeInfectionZombieTeam, eao_infection_zombie_team_str);
-    pICommand->Del(eaoGametypeInfectionZombieRespawn, eao_infection_zombie_respawn_str);
-    pICommand->Del(eaoGametypeInfectionHumanRespawn, eao_infection_human_respawn_str);
-    pICommand->Del(eaoGametypeInfectionZombieSpeed, eao_infection_zombie_speed_str);
-    pICommand->Del(eaoGametypeInfectionHumanSpeed, eao_infection_human_speed_str);
-    pICommand->Del(eaoGametypeInfectionLastManSpeed, eao_infection_last_man_speed_str);
-    pICommand->Del(eaoGametypeInfectionLastManNextZombie, eao_infection_last_man_next_zombie_str);
-    pICommand->Del(eaoGametypeInfectionZombieAllowInVehicle, eao_infection_zombie_allow_in_vehicle_str);
-    pICommand->Del(eaoGametypeInfectionHumanAllowInVehicle, eao_infection_human_allow_in_vehicle_str);
-    pICommand->Del(eaoGametypeInfectionInfectOnFall, eao_infection_infect_on_fall_str);
-    pICommand->Del(eaoGametypeInfectionInfectOnGuardians, eao_infection_infect_on_guardians_str);
-    pICommand->Del(eaoGametypeInfectionInfectOnSuicide, eao_infection_infect_on_suicide_str);
-    pICommand->Del(eaoGametypeInfectionInfectOnBetrayal, eao_infection_infect_on_betrayal_str);
-    pICommand->Del(eaoGametypeInfectionZombieInvisibleOnCrouch, eao_infection_zombie_invisible_on_crouch_str);
-    haloOutput(0, "Infection GameType support removed.");
+    return 0;
 }
 #pragma endregion
 
-
-/*
-
-Task list:
-
- * Need to clean up the oddballs/flags before the unload process, seems didn't clean up right or is missing. (Oh, it was commented out.)
- * Finish the commands + custom message for the command outputs.
- * What other things need to be fix?
-
-Known Bugs:
- * Speed modifier does not work effectively for just loaded & turn on.
- * Navpoints does not show correctly due to client-side need H-Ext's fixed bug.
- * The player's FFA color does not sync to client's hud. (Need to research this later, very complex network packet to do.)
-
-*/
-
-
-
-
-#if 0
-bool hasZombie = 0;
-IObject::hTagHeader* ball = NULL;
-IObject::hTagHeader* flag = NULL;
-//expand for zombie gametype.
-bool allowScoreCTF = 0;
-bool gameStart = 0;
-bool zombieEnable = 0;
-bool invalidGameType = 0;
-short maxPlayersIntialize = 2;
-char countDown=0;
-float maxShield = 0.0f;
-float maxHealth = 600.0f;
-float maxSpeed = 1.5f;
-DWORD idTimer = -1;
-bool human=0;
-char lastChose = 0;
-static wchar_t zombieWin[] = L"And the winner is...ZOMBIES!!! Congraduation!";
-static wchar_t humanWin[] = L"And the winner is...HUMANS!!! Congraduation!";
-static wchar_t zombieKill[] = L"%s has pulled %s into the graveyard.";
-static wchar_t humanKill[] = L"%s has put %s back in the graveyard.";
-static wchar_t disgraceKill[] = L"%s has been disgraced by kill %s.";
-static wchar_t guardianKill[] = L"Guardian pulled %s into the graveyard.";
-static wchar_t deathKill[] = L"%s has fallen into the graveyard.";
-static wchar_t vehicleKill[] = L"%s has been run over by a vehicle.";
-static wchar_t serverKill[] = L"%s has been killed by mother nature.";
-static wchar_t welcomeMsg[] = L"Welcome to alpha version of Zombie Gametype, be aware this is not a final stage of development.";
-static const wchar_t zombieStr[] = L"eao_gametype_zombie";
-static char countDown10[] = "10", countDown5[] = "5", countDown4[] = "4",  countDown3[] = "3", countDown2[] = "2", countDown1[] = "1";
-
-
-static addon::addonInfo eaoInfo = { L"Zombie GameType Add-on", L"1.0.0.0",
-                            L"RadWolfie & Wizard",
-                            L"It provide ability simulate a zombie gametype with almost any proper gametype provided.",
-                            L"Zombie Gametype",
-                            L"gametype",
-                            NULL,
-                            NULL,
-                            NULL,
-                            NULL};
-CNATIVE dllAPI addon::addonInfo* EXTPluginInfo = &eaoInfo;
-
-/*
-struct timerStruct {
-    DWORD idTimer;
-    IPlayer::PlayerInfo plI;
-
-
-};
-util::dynamicStack<timerStruct> timerList;//*/
-
-struct scoreBoard {
-    bool zombie[16];
-    scoreBoard() {
-        zombie[0] = 0;
-        zombie[1] = 0;
-        zombie[2] = 0;
-        zombie[3] = 0;
-        zombie[4] = 0;
-        zombie[5] = 0;
-        zombie[6] = 0;
-        zombie[7] = 0;
-        zombie[8] = 0;
-        zombie[9] = 0;
-        zombie[10] = 0;
-        zombie[11] = 0;
-        zombie[12] = 0;
-        zombie[13] = 0;
-        zombie[14] = 0;
-        zombie[15] = 0;
-    }
-};
-scoreBoard stats = scoreBoard();
-bool checkZombies() {
-    char countZombies = 0;
-    for (char i=0; i<16; i++) {
-        if (stats.zombie[i]) countZombies++;
-    }
-    if (countZombies==0) {
-        /*IPlayer::PlayerInfo plI;
-        for (char i=0; i<16; i++) {
-            plI = pIPlayer->getPlayerMindex(i);
-            if (plI.plEx && plI.plEx->isInServer) {
-                stats.zombie[i]=1;
-                plI.plS->iTeam=TEAM_BLUE;
-                plI.plS->Team=TEAM_BLUE;
-                if (plI.plS->CurrentBiped.Tag!=-1)
-                    pIObject->Delete(plI.plS->CurrentBiped);
-                break;
-                //TODO need to set as zombie.
-            }
-        }*/
-    } else return 1;
-    return 0;
-}
-short countPlayers() {
-    char i = 0;
-    short count = 0;
-    IPlayer::PlayerInfo plI;
-    for (i; i<16; i++) {
-        plI = pIPlayer->getPlayerMindex(i);
-        if (plI.plEx && plI.plEx->isInServer) count++;
-    }
-    return count;
-}
-void deleteBiped(ident& biped_Tag) {
-    BipedS* pl_Biped = (BipedS*)pIObject->GetObjectAddress(3, biped_Tag);
-    if (!pl_Biped) return;
-    if (pl_Biped->sObject.Vehicle.Tag!=-1)
-        pIObject->Eject(biped_Tag);
-    if (pl_Biped->Equipments[0].Tag!=-1)
-        pIObject->Delete(pl_Biped->Equipments[1]);
-    if (pl_Biped->Equipments[1].Tag!=-1)
-        pIObject->Delete(pl_Biped->Equipments[1]);
-    if (pl_Biped->Equipments[2].Tag!=-1)
-        pIObject->Delete(pl_Biped->Equipments[2]);
-    if (pl_Biped->Equipments[3].Tag!=-1)
-        pIObject->Delete(pl_Biped->Equipments[3]);
-    pl_Biped->grenade0=0;
-    pl_Biped->grenade1=0;
-    pIObject->Delete(biped_Tag);
-}
-//TODO need make settings and wait system for ready to start gametype. Plus random chosen player to be zombie.
-//TODO need to real-time modify for biped's color to take effect, the colors set is already done.
-//TODO need map live up time for server lock.
-//TODO need ban hook for server lock?
-//TODO need assign gameobject as current and ability to drop it.
-//TODO need add commands
-//TODO need to check players is in vehicle to force eject before delete?
-//TODO need to not to select same player for next game
-//TODO what else?
-void getOddballAndFlagHeader() {
-    ball = pIObject->LookupTagTypeName("weap", "weapons\\ball\\ball");
-    flag = pIObject->LookupTagTypeName("weap", "weapons\\flag\\flag");
-}
-void setZombie(IPlayer::PlayerInfo& plI) {
-    stats.zombie[plI.plS->MachineIndex]=1;
-    plI.plS->iTeam=TEAM_BLUE;
-    plI.plS->Team=TEAM_BLUE;
-    if (plI.plS->CurrentBiped.Tag!=-1)
-        deleteBiped(plI.plS->CurrentBiped);
-    IPlayer::PlayerInfo human;
-    for (char i=0; i<16; i++) {
-        human = pIPlayer->getPlayerMindex(i);
-        if (human.plS && plI.plS->MachineIndex!=human.plS->MachineIndex) {
-            human.plS->iTeam=TEAM_RED;
-            human.plS->Team=TEAM_RED;
-            if (human.plS->CurrentBiped.Tag!=-1)
-                deleteBiped(human.plS->CurrentBiped);
-        }
-    }
-}
-void randomZombie() {
-    IPlayer::PlayerInfo plI;
-    char randNum = (*pIHaloEngine->mapStatus)->upTime % 15;
-    short countPl = countPlayers();
-    for (;;randNum++) {
-        if (countPl>1 && randNum==lastChose)
-            randNum++;
-        if (randNum>15)
-            randNum=0;
-        plI = pIPlayer->getPlayerMindex(randNum);
-        if (plI.plEx && plI.plEx->isInServer) {
-            setZombie(plI);
-            break;
-        }
-    }
-}
-void WINAPIC TimerEvent(DWORD id, void* param) {
-    idTimer=-1;
-    if (countDown>0 && maxPlayersIntialize<=countPlayers()) {
-        countDown--;
-        IPlayer::PlayerInfo plI;
-        rconData cdRcon("");
-        switch(countDown) {
-            case 10: {
-                cdRcon = rconData(countDown10);
-                break;
-            }
-            case 5: {
-                cdRcon = rconData(countDown5);
-                break;
-            }
-            case 4: {
-                cdRcon = rconData(countDown4);
-                break;
-            }
-            case 3: {
-                cdRcon = rconData(countDown3);
-                break;
-            }
-            case 2: {
-                cdRcon = rconData(countDown2);
-                break;
-            }
-            case 1: {
-                cdRcon = rconData(countDown1);
-                break;
-            }
-            default: {
-                goto skipCountDown;
-            }
-        }
-        for (char i = 0; i<16; i++) {
-            plI = pIPlayer->getPlayerMindex(i);
-            if (plI.plEx && plI.plEx->isInServer)
-                pIHaloEngine->DispatchRcon(cdRcon, plI);
-        }
-skipCountDown:
-        idTimer = addon::pITimer->EXTAddOnTimerAdd(plI, 30);
-    } else if (countDown==0 && countPlayers()>0) {
-        gameStart=1;
-        randomZombie();
-    }
-}
-#endif
-#if 0
-toggle WINAPIC eaoGametypeZombie(IPlayer::PlayerInfo plI, util::ArgContainer& arg, char chatRconRemote, DWORD idTimer, bool* showChat) {
-    toggle gameMode = util::StrToBooleanW(arg[1]);
-    if (gameMode==1) {
-        stats = scoreBoard();
-        if (!ball)
-            getOddballAndFlagHeader();
-        zombieEnable=1;
-        if (countPlayers()>=maxPlayersIntialize) {
-            countDown=11;
-            if (idTimer>-1)
-                addon::pITimer->EXTAddOnTimerDelete(idTimer);
-            idTimer = addon::pITimer->EXTAddOnTimerAdd(plI, 30);
-        }
-        /*for (char i=0; i<16; i++) {
-            plI = pIPlayer->getPlayerMindex(i);
-            if (plI.plS) {
-                if (checkZombies()) {
-                    plI.plS->iTeam=TEAM_RED;
-                    plI.plS->Team=TEAM_RED;
-                    if (plI.plS->CurrentBiped.Tag!=-1)
-                        pIObject->Delete(plI.plS->CurrentBiped);
-                }
-            }
-        }*/
-    } else if (gameMode==0) {
-        IPlayer::PlayerInfo plI;
-        zombieEnable=0;
-        if (gameStart) {
-            gameStart=0;
-            if (idTimer>-1)
-                addon::pITimer->EXTAddOnTimerDelete(idTimer);
-            for (char i=0; i<16; i++) {
-                plI = pIPlayer->getPlayerMindex(i);
-                if (plI.plS) {
-                    plI.plS->iTeam=human?TEAM_RED:TEAM_BLUE;
-                    plI.plS->Team=human?TEAM_RED:TEAM_BLUE;
-                    plI.plS->ColorIndex=human?COLOR_RED:COLOR_BLUE;
-                    if (plI.plS->CurrentBiped.Tag!=-1)
-                        deleteBiped(plI.plS->CurrentBiped);
-                    human = !human;
-                }
-            }
-        }
-    } else {
-        haloOutput(0, "Error, must be boolean value to initatize the zombie gametype");
-        return CMDFAIL;
-    }
-    return CMDSUCC;
-}
-#endif
-#if 0
-CNATIVE dllAPI void WINAPIC EXTOnPlayerJoin(IPlayer::PlayerInfo plI) { //TODO need add compatible for oddball gametype due to oddball assign cause crash.
-    if (zombieEnable && !gameStart && countPlayers()>=maxPlayersIntialize && countDown==0) {
-        countDown=11;
-        idTimer = addon::pITimer->EXTAddOnTimerAdd(plI, 30);
-    }
-    if (!gameStart)
-        return;
-    else if (!ball) getOddballAndFlagHeader();
-    chatData msg;
-    msg.player=plI.plS->PlayerIndex;
-    msg.type=3;
-    msg.msg=welcomeMsg;
-    pIHaloEngine->DispatchPlayer(msg, wcslen(welcomeMsg), plI);
-    //checkZombies();
-}
-CNATIVE dllAPI void WINAPIC EXTOnPlayerQuit(IPlayer::PlayerInfo plI) {
-    if (!gameStart || !plI.plS)
-        return;
-    deleteBiped(plI.plS->PreviousBiped);
-    stats.zombie[plI.plS->MachineIndex] = 0;
-    if (countPlayers()<2) {
-        gameStart=0;
-        countDown=0;
-        for (char i=0; i<16; i++) {
-            plI = pIPlayer->getPlayerMindex(i);
-            if (plI.plS) {
-                plI.plS->iTeam=human?TEAM_RED:TEAM_BLUE;
-                plI.plS->Team=human?TEAM_RED:TEAM_BLUE;
-                plI.plS->ColorIndex=human?COLOR_RED:COLOR_BLUE;
-                if (plI.plS->CurrentBiped.Tag!=-1)
-                    pIObject->Delete(plI.plS->CurrentBiped);
-                human = !human;
-            }
-        }
-        return;
-    } else if (!checkZombies()) {
-        randomZombie();
-    }
-}
-#endif
-#if 0
-CNATIVE dllAPI bool WINAPIC EXTOnObjectInteraction(IPlayer::PlayerInfo plI, ident m_ObjId, ObjectS* objectStruct, IObject::hTagHeader* hTag) {
-    if (!gameStart)
-        return 1;
-    else if (!ball) getOddballAndFlagHeader();
-    if (!stats.zombie[plI.plS->MachineIndex]) {
-        if (ball && ball->id==hTag->id && objectStruct->GameObject==-1)
-            return 0;
-    } else {
-        if (ball && ball->id==hTag->id)
-            return 1;
-        if (flag && flag->id==hTag->id && allowScoreCTF && objectStruct->GameObject!=-1)
-            return 1;
-        return 0;
-    }
-    if (flag && flag->id==hTag->id)
-        if (allowScoreCTF && objectStruct->GameObject!=-1)
-            return 1;
-        else
-            return 0;
-    return 1;
-}
-#endif
-#if 0
-CNATIVE dllAPI void WINAPIC EXTOnPlayerDeath(IPlayer::PlayerInfo killerI, IPlayer::PlayerInfo victimI, int mode, int& showMessage) {
-    /*
-     * Mode info
-     * -1 = Don't show message.
-     * 0 = custom kill with no message
-     * 1 = fall damage or server kill
-     * 2 = killed by guardians
-     * 3 = killed by a vehicle
-     * 4 = killed by another player
-     * 5 = betrayed by same team
-     * 6 = suicide
-     */
-    if (!gameStart)
-        return;
-    wchar_t* printMsg = new wchar_t[256];
-    printMsg[0]=NULL;
-    chatData msg;
-    msg.player=victimI.plS->PlayerIndex;
-    msg.type=3;
-    msg.msg=NULL;
-    if (!stats.zombie[victimI.plS->MachineIndex]) {//if is humans
-        switch(mode) {
-            case 0: {
-                swprintf_s(printMsg, 256, serverKill, victimI.plS->Name);
-                goto skipZombieChange;
-            }
-            case 1: {
-                swprintf_s(printMsg, 256, deathKill, victimI.plS->Name);
-                break;
-            }
-            case 2: {
-                swprintf_s(printMsg, 256, guardianKill, victimI.plS->Name);
-                break;
-            }
-            case 3: {
-                swprintf_s(printMsg, 256, vehicleKill, victimI.plS->Name);
-                goto skipZombieChange;
-            }
-            case 4: {
-                if (killerI.plS && stats.zombie[killerI.plS->MachineIndex]) {//Zombie kills
-                    swprintf_s(printMsg, 256, zombieKill, killerI.plS->Name, victimI.plS->Name);
-                    break;
-                } else {//Human kills
-                    swprintf_s(printMsg, 256, disgraceKill, killerI.plS->Name, victimI.plS->Name);
-                    goto skipZombieChange;
-                }
-            }
-            case 5: {
-                swprintf_s(printMsg, 256, disgraceKill, killerI.plS->Name, victimI.plS->Name);
-                break;
-            }
-            case 6: {
-                swprintf_s(printMsg, 256, deathKill, victimI.plS->Name);
-                break;
-            }
-        }
-    } else {
-        BipedS* zombieBiped = (BipedS*)pIObject->GetObjectAddress(3, victimI.plS->CurrentBiped);
-        zombieBiped->grenade0=0;
-        zombieBiped->grenade1=0;
-        IObject::hTagHeader* tagH;
-        ObjectS* weapon = pIObject->GetObjectAddress(3, zombieBiped->Equipments[0]);
-        if (weapon && weapon->GameObject==-1) {
-            tagH = pIObject->LookupTag(weapon->ModelTag);
-            if (tagH == ball)
-                pIObject->Delete(zombieBiped->Equipments[0]);
-        }
-        weapon = pIObject->GetObjectAddress(3, zombieBiped->Equipments[1]);
-        if (weapon && weapon->GameObject==-1) {
-            tagH = pIObject->LookupTag(weapon->ModelTag);
-            if (tagH == ball)
-                pIObject->Delete(zombieBiped->Equipments[1]);
-        }
-        weapon = pIObject->GetObjectAddress(3, zombieBiped->Equipments[2]);
-        if (weapon && weapon->GameObject==-1) {
-            tagH = pIObject->LookupTag(weapon->ModelTag);
-            if (tagH == ball)
-                pIObject->Delete(zombieBiped->Equipments[2]);
-        }
-        weapon = pIObject->GetObjectAddress(3, zombieBiped->Equipments[3]);
-        if (weapon && weapon->GameObject==-1) {
-            tagH = pIObject->LookupTag(weapon->ModelTag);
-            if (tagH == ball)
-                pIObject->Delete(zombieBiped->Equipments[3]);
-        }
-        switch(mode) {
-            case 0: {
-                swprintf_s(printMsg, 256, serverKill, victimI.plS->Name);
-                break;
-            }
-            case 1: {
-                swprintf_s(printMsg, 256, deathKill, victimI.plS->Name);
-                break;
-            }
-            case 2: {
-                swprintf_s(printMsg, 256, guardianKill, victimI.plS->Name);
-                break;
-            }
-            case 3: {
-                swprintf_s(printMsg, 256, vehicleKill, victimI.plS->Name);
-                break;
-            }
-            case 4: {
-                swprintf_s(printMsg, 256, humanKill, killerI.plS->Name, victimI.plS->Name);
-                break;
-            }
-            case 5: {
-                swprintf_s(printMsg, 256, disgraceKill, killerI.plS->Name, victimI.plS->Name);
-                break;
-            }
-            case 6: {
-                swprintf_s(printMsg, 256, disgraceKill, killerI.plS->Name, victimI.plS->Name);
-                break;
-            }
-        }
-        goto skipZombieChange;
-    }
-    stats.zombie[victimI.plS->MachineIndex]=1;
-    victimI.plS->iTeam=TEAM_BLUE;
-    victimI.plS->Team=TEAM_BLUE;
-    short sumZombies = 0;
-    for (short i = 0; i<16; i++) {
-        if (stats.zombie[i]) sumZombies++;
-    }
-    if (sumZombies==pIHaloEngine->globalServer->totalPlayers)
-        pIHaloEngine->MapNext();
-skipZombieChange:
-    showMessage=0;
-    short len = wcslen(printMsg);
-    if (len) {
-        msg.msg = printMsg;
-        pIHaloEngine->DispatchGlobal(msg, wcslen(printMsg));
-    }
-    delete[] printMsg;
-}
-#endif
-#if 0
-CNATIVE dllAPI bool WINAPIC EXTOnPlayerChangeTeamAttempt(IPlayer::PlayerInfo plI, int team) {
-    if (!gameStart)
-        return 1;
-    return 0;
-}
-CNATIVE dllAPI int WINAPIC EXTOnPlayerJoinDefault(MachineS* mS, int cur_team) {
-    if (!gameStart)
-        return -1;
-    else if (checkZombies()) {
-        return TEAM_RED;
-    } else {
-        stats.zombie[mS->machineIndex]=1;
-        return TEAM_BLUE;
-    }
-}
-CNATIVE dllAPI ident WINAPIC EXTOnWeaponAssignmentDefault(IPlayer::PlayerInfo plI, ident owningObjectId, IObject::objInfo* curWeapon, DWORD order, ident newWeaponId) {
-    if (gameStart && plI.plS) {
-        if (stats.zombie[plI.plS->MachineIndex]) {
-            if (order==1) {
-                newWeaponId.Tag=-1;
-                return newWeaponId;
-            }
-            if (ball)
-                newWeaponId.Tag=ball->id;
-        }
-    }
-    return newWeaponId;
-}
-CNATIVE dllAPI ident WINAPIC EXTOnWeaponAssignmentCustom(IPlayer::PlayerInfo plI, ident owningObjectId, DWORD curWeapon, DWORD order, ident newWeaponId) {
-    if (gameStart && plI.plS && stats.zombie[plI.plS->MachineIndex]) {
-        newWeaponId.Tag=-1;
-    }
-    return newWeaponId;
-}
-CNATIVE dllAPI bool WINAPIC EXTOnPlayerScoreCTF(IPlayer::PlayerInfo plI, ident curWeapon, DWORD team, bool isGameObject) {
-    if (gameStart && allowScoreCTF && isGameObject)
-        return 1;
-    return 0;
-}
-#endif
-#if 0
-CNATIVE dllAPI bool WINAPIC EXTOnPlayerDropObject(IPlayer::PlayerInfo plI, ident owningObjectId, BipedS* pl_Biped) {
-    if (gameStart) {
-        if (plI.plS) {
-            WeaponS* weap = (WeaponS*)pIObject->GetObjectAddress(3, pl_Biped->Equipments[pl_Biped->sObject.Weapon.index]);
-            if (stats.zombie[plI.plS->MachineIndex])// && weap && weap->sObject.GameObject==-1 && weap->sObject.ModelTag.Tag == ball->id)
-                return 0;
-        }
-        if (gameStart && allowScoreCTF && (pl_Biped->sObject.Weapon.index==0 || pl_Biped->sObject.Weapon.index==1)) {
-            //TODO: Need to go more depth here...
-            return 1;
-        }
-    }
-    return 1;
-}
-CNATIVE dllAPI void WINAPIC EXTOnPlayerSpawn(IPlayer::PlayerInfo plI, ident owningObjectId, BipedS* pl_Biped) {
-    if (gameStart && plI.plS && stats.zombie[plI.plS->MachineIndex]) {
-        pl_Biped->grenade0=0;
-        pl_Biped->grenade1=0;
-        if (maxSpeed)
-            plI.plS->VelocityMultiplier=maxSpeed;
-        if (maxHealth)
-            pl_Biped->sObject.HealthMax=maxHealth;
-        if (maxShield)
-            pl_Biped->sObject.ShieldMax=maxShield;
-    }
-}
-CNATIVE dllAPI bool WINAPIC EXTOnVehicleUserEntry(IPlayer::PlayerInfo plI) {
-    if (!gameStart)
-        return 1;
-    //else if (plI.plS && !stats.zombie[plI.plS->MachineIndex])
-        //return 1;
-    rconData msg("Vehicle usage is not allow due to zombie unable to kill human in vehicle.");
-    pIHaloEngine->DispatchRcon(msg, plI);
-    return 0;
-}
-#endif
-#if 0
-CNATIVE dllAPI bool WINAPIC EXTOnPlayerSpawnColor(IPlayer::PlayerInfo plI, bool isTeamPlay) {
-    if (!gameStart)
-        return 1;
-    else if (stats.zombie[plI.plS->MachineIndex] && plI.plS->ColorIndex!=COLOR_GRAY)
-        plI.plS->ColorIndex=COLOR_GRAY;
-    else if (!stats.zombie[plI.plS->MachineIndex] && plI.plS->ColorIndex!=COLOR_SAGE)
-        plI.plS->ColorIndex=COLOR_SAGE;
-    return 0;
-}
-#endif
-#if 0
-CNATIVE dllAPI void WINAPIC EXTOnEndGame(int mode) {
-    if (gameStart && mode==2) {
-        ball=NULL;
-        flag=NULL;
-        invalidGameType=0;
-        chatData p;
-        p.player = -1;
-        p.type = 3;
-        if (pIHaloEngine->gameTypeLive->isTeamPlay) {
-            char sumZombies = 0;
-            for (char i = 0; i<16; i++) {
-                if (stats.zombie[i]) sumZombies++;
-            }
-            if (sumZombies<pIHaloEngine->globalServer->totalPlayers)
-                p.msg=humanWin;
-            else p.msg=zombieWin;
-        }
-        pIHaloEngine->DispatchGlobal(p, wcslen(p.msg));
-        gameStart=0;
-        //TODO add a message to see who won or something...
-    }
-}
-CNATIVE dllAPI void WINAPIC EXTOnNewGame(wchar_t* mode) {
-    getOddballAndFlagHeader();
-    stats = scoreBoard();
-    if (pIHaloEngine->gameTypeLive->GameStage==ODDBALL)
-        invalidGameType=1;
-    gameStart=0;
-}
-#endif
-#if 0
-CNATIVE dllAPI toggle WINAPIC EXTOnEAOLoad() {
-    pICommand->Add(zombieStr, eaoGametypeZombie, eaoInfo.sectors.sect_name1, 2, 2, 0, util::modeHost);
-    haloOutput(0, "Zombie GameType support added.");
-    return EAOCONTINUE;
-}
-
-CNATIVE dllAPI void WINAPIC EXTOnEAOUnload() {
-    pICommand->Del(eaoGametypeZombie, zombieStr);
-    haloOutput(0, "Zombie GameType support removed.");
-}
-
-
-CNATIVE dllAPI void WINAPIC EXTOnTimerExecute(DWORD idTimer) {
-    //idTimer=-1;
-    if (countDown>0 && maxPlayersIntialize<=countPlayers()) {
-        countDown--;
-        IPlayer::PlayerInfo plI;
-        rconData cdRcon("");
-        switch(countDown) {
-            case 10: {
-                cdRcon = rconData(countDown10);
-                break;
-            }
-            case 5: {
-                cdRcon = rconData(countDown5);
-                break;
-            }
-            case 4: {
-                cdRcon = rconData(countDown4);
-                break;
-            }
-            case 3: {
-                cdRcon = rconData(countDown3);
-                break;
-            }
-            case 2: {
-                cdRcon = rconData(countDown2);
-                break;
-            }
-            case 1: {
-                cdRcon = rconData(countDown1);
-                break;
-            }
-            default: {
-                goto skipCountDown;
-            }
-        }
-        for (char i = 0; i<16; i++) {
-            plI = pIPlayer->getPlayerMindex(i);
-            if (plI.plEx && plI.plEx->isInServer)
-                pIHaloEngine->DispatchRcon(cdRcon, plI);
-        }
-skipCountDown:
-        idTimer = addon::pITimer->EXTAddOnTimerAdd(plI, 30);
-    } else if (countDown==0 && countPlayers()>0) {
-        gameStart=1;
-        randomZombie();
-    }
-}
-CNATIVE dllAPI void WINAPIC EXTOnTimerCancel(DWORD idTimer) {
-    /*for(util::dynamicStack<timerStruct>::iterator timer = timerList.begin(); timer!=NULL;timer++) {
-        if (timer->idTimer==idTimer) {
-            timerList.erase(timer);
-            break;
-        }
-    }//*/
-}
-#endif
-#include "..\Add-on API\expChecker.h"
+#include "..\Add-on API\C\expChecker.h"
